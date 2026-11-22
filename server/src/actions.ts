@@ -1828,7 +1828,17 @@ interface OverseasItem {
   expReq?: string | null;
   acceptsOverseas?: boolean | null;
   visaSupport?: "yes" | "no" | "unstated";
-  policyStatus?: "enacted" | "proposal" | "unstated" | null;
+  policyStatus?: "enacted" | "proposal" | "unstated" | "upcoming" | null;
+  /**
+   * Structured effective date (YYYY-MM-DD) plus the policy location's IANA
+   * time zone, when the status label must be COMPUTED from the location's
+   * own local date (user rule, 2026-11-22) instead of trusting a stored
+   * verdict: before the effective date the label is 「即将生效」, on/after
+   * it 「已生效」. Set on the NZ Short-term Graduate Work Visa pin
+   * (2026-11-23, Pacific/Auckland).
+   */
+  effectiveDate?: string | null;
+  effectiveTimeZone?: string | null;
 }
 
 type OverseasCategory = "study" | "work_visa";
@@ -1980,7 +1990,15 @@ const NZ_SGWV_ITEM: OverseasItem = {
   visa: true,
   pinned: true,
   kind: "policy",
-  policyStatus: "enacted",
+  // No stored status verdict (user fix, 2026-11-22): the label is computed
+  // at read time from the effective date vs the CURRENT DATE IN NEW
+  // ZEALAND (Pacific/Auckland) — before 2026-11-23 it reads 「即将生效」,
+  // on/after it 「已生效」. The old hardcoded "enacted" showed 「已生效」
+  // while the card itself said 「11 月 23 日起」 and New Zealand was still
+  // on 22 November. See policyStatusOnDate / normalizeOverseas.
+  policyStatus: null,
+  effectiveDate: "2026-11-23",
+  effectiveTimeZone: "Pacific/Auckland",
 };
 
 /**
@@ -3092,6 +3110,15 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
       policyStatus: entry?.policyStatus ?? null,
     });
   }
+  // Deterministic corrections at ingest (same correction also runs on
+  // every read inside normalizeOverseas): the NIC Winter Internship is an
+  // internship, not a study programme — see correctOverseasItem.
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (!item) continue;
+    const fixed = correctOverseasItem(item);
+    if (fixed !== item) items[i] = fixed;
+  }
   items.sort((a, b) => {
     const ta = a.publishedAt ? new Date(a.publishedAt).getTime() : 0;
     const tb = b.publishedAt ? new Date(b.publishedAt).getTime() : 0;
@@ -3417,7 +3444,7 @@ const overseasItemSchema = z.object({
   expReq: z.string().nullable(),
   acceptsOverseas: z.boolean().nullable(),
   visaSupport: z.enum(["yes", "no", "unstated"]),
-  policyStatus: z.enum(["enacted", "proposal", "unstated"]).nullable(),
+  policyStatus: z.enum(["enacted", "proposal", "unstated", "upcoming"]).nullable(),
 });
 
 const worldItemSchema = feedItemSchema.extend({
@@ -3433,21 +3460,104 @@ const worldItemSchema = feedItemSchema.extend({
 // them — never guessed.
 // ---------------------------------------------------------------------------
 
+/**
+ * Policy status from the policy LOCATION's own calendar (user rule,
+ * 2026-11-22): compare the policy's effective date (YYYY-MM-DD) with
+ * today's date IN THE POLICY'S TIME ZONE — never the page date and never
+ * an unzoned server date. Before the effective date the policy is
+ * 「即将生效」 (upcoming); on the day itself and after, 「已生效」
+ * (enacted). Pure function of (effectiveDate, timeZone, now) so the rule
+ * is unit-testable with fixed instants.
+ */
+export function policyStatusOnDate(
+  effectiveDate: string,
+  timeZone: string,
+  now: Date,
+): "upcoming" | "enacted" {
+  const localToday = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+  return localToday < effectiveDate ? "upcoming" : "enacted";
+}
+
+/**
+ * The NIC (National Informatics Centre, under India's MeitY) Winter
+ * Internship item — reported by India.com et al. with a Rs 20,000 total
+ * stipend. Matched on the headline / URL slug so every retelling of the
+ * same programme is corrected the same way.
+ */
+export function isNicWinterInternship(it: { title: string; url: string }): boolean {
+  return (
+    /nic[\s-]+winter[\s-]+internship/i.test(it.title) ||
+    /nic-winter-internship/i.test(it.url) ||
+    (/national informatics centre/i.test(it.title) && /winter internship/i.test(it.title))
+  );
+}
+
+/**
+ * User-verified correction (2026-11-22) for the NIC Winter Internship:
+ * the enrichment pass filed this INTERNSHIP under 海外升学 (study). It
+ * belongs in 海外实习、工作与签证 as an in-study internship (kind=job,
+ * stage=intern). Facts checked against the official NIC / MeitY Digital
+ * India Internship notification as reported by India.com / NDTV /
+ * Moneycontrol (all citing the official notification): the internship is
+ * OFFLINE at NIC Headquarters, New Delhi (2026-12-01 → 2027-01-31, Rs
+ * 10,000/month, Rs 20,000 total, 50 seats, applications via dii.nic.in) —
+ * so location is New Delhi and it is NOT remote from China. Whether a
+ * student enrolled at a Chinese institution may apply is NOT stated in
+ * the notification coverage, so applicability stays honestly unstated:
+ * eligibility "unclear" and acceptsOverseas null （未说明） — never
+ * presented as applicable, and getDailyDigest excludes it from
+ * 「近期可申请」. Applied at ingest and inside normalizeOverseas, so
+ * cached payloads are corrected on every read too.
+ */
+export function correctOverseasItem(it: OverseasItem): OverseasItem {
+  if (!isNicWinterInternship(it)) return it;
+  return {
+    ...it,
+    country: "印度",
+    category: "work_visa",
+    stage: "intern",
+    kind: "job",
+    eligibility: "unclear",
+    location: "印度新德里（NIC 总部，线下进行）",
+    remoteFromChina: false,
+    acceptsOverseas: null,
+    visaSupport: "unstated",
+  };
+}
+
 function overseasRelevance(it: OverseasItem): string {
+  const kind: "news" | "job" | "policy" = it.kind ?? (it.visa || it.isImmigration ? "policy" : "news");
+  // Policy cards FIRST (user rule, 2026-11-22): a policy only states whom
+  // it affects — never application wording （专科可申请 / 看条件和截止日期）,
+  // even when the underlying eligibility field says diploma_eligible (the
+  // Yale OISS D/S card hit exactly that bug).
+  if (kind === "policy")
+    return `这是${it.country}的政策动态，不是岗位；它影响的是：${it.identityLabel ?? it.whoApplies ?? "见原文"}，会影响你之后去${it.country}读书或工作的安排。`;
   if (it.eligibility === "diploma_eligible")
     return "来源明确接受专科背景，与你直接相关，可点开看条件和截止日期。";
-  if (it.kind === "policy")
-    return `这是${it.country}的政策动态，不是岗位；适用身份：${it.identityLabel ?? it.whoApplies ?? "见原文"}，会影响你之后去${it.country}读书或工作的安排。`;
-  if (it.kind === "job")
+  if (kind === "job")
     return `岗位在${it.location ?? it.country}，与信息安全、网络运维或 IT 支持方向相关；签证支持${it.visaSupport === "yes" ? "雇主已明确提供" : it.visaSupport === "no" ? "雇主明确不提供" : "未说明"}，点开看完整要求。`;
   return it.whoApplies
     ? `适用于：${it.whoApplies}。适用学历${it.eligibility === "bachelor_only" ? "仅限本科毕业生" : "未写清"}，点开核对再决定。`
     : "来源未写清适用人群，点开看原文再判断和你的关系。";
 }
 
-function normalizeOverseas(it: OverseasItem): z.infer<typeof overseasItemSchema> {
+function normalizeOverseas(raw: OverseasItem): z.infer<typeof overseasItemSchema> {
+  const it = correctOverseasItem(raw);
   const category: OverseasCategory = it.category ?? (it.visa || it.isImmigration ? "work_visa" : "study");
   const kind: "news" | "job" | "policy" = it.kind ?? (it.visa || it.isImmigration ? "policy" : "news");
+  // A policy with a structured effective date gets its status COMPUTED
+  // from the policy location's local date (NZ SGWV: 2026-11-23,
+  // Pacific/Auckland) — never a stored verdict, never the page date.
+  const computedStatus =
+    kind === "policy" && it.effectiveDate && it.effectiveTimeZone
+      ? policyStatusOnDate(it.effectiveDate, it.effectiveTimeZone, new Date())
+      : null;
   return {
     title: it.title,
     url: it.url,
@@ -3474,7 +3584,9 @@ function normalizeOverseas(it: OverseasItem): z.infer<typeof overseasItemSchema>
     relevance: overseasRelevance(it),
     majorMatch: it.majorMatch ?? null,
     languageReq: it.languageReq ?? null,
-    deadline: it.deadline ?? null,
+    // Policy cards carry no application fields (user rule, 2026-11-22):
+    // no deadline is ever exposed for a policy, whatever enrichment stored.
+    deadline: kind === "policy" ? null : (it.deadline ?? null),
     tuition: it.tuition ?? null,
     livingCost: it.livingCost ?? null,
     scholarship: it.scholarship ?? null,
@@ -3484,7 +3596,7 @@ function normalizeOverseas(it: OverseasItem): z.infer<typeof overseasItemSchema>
     expReq: it.expReq ?? null,
     acceptsOverseas: it.acceptsOverseas ?? null,
     visaSupport: it.visaSupport ?? "unstated",
-    policyStatus: it.policyStatus ?? (kind === "policy" ? "unstated" : null),
+    policyStatus: computedStatus ?? it.policyStatus ?? (kind === "policy" ? "unstated" : null),
   };
 }
 
@@ -4061,7 +4173,7 @@ export const Actions = {
 
   getOverseas: defineAction({
     description:
-      "Returns decision-changing overseas opportunities and policy changes for a Chinese 专科 (diploma) student across the US, New Zealand, Singapore, Vietnam, Japan, South Korea, Ireland and the UK: what changed, who it applies to and when it takes effect, with the original university/government link. Applicability is checked BEFORE pinning (2026-11-22): an item that clearly does not apply to the user — bachelor_only, or its own text says 不适用于我 / 不含信息安全技术应用 — is excluded from the column entirely, fixed visa zone included (so the zone holds the Yale D/S ruling, Singapore MOM thresholds, the Japan language-school rule and — since 2026-11-22, as a hand-verified curated pin exempt from the rotating list's nationality filter — the NZ Short-term Graduate Work Visa labelled as a future path (usable only after completing an NZQCF Level 5–7 qualification in NZ; the user's Jiangxi diploma does not itself qualify, and it is a different visa from the bachelor-only NZ PSWV expansion); the bachelor-only NZ PSWV/UK items and the Korea pilot are out). Homepage selection also requires the item to involve Chinese applicants or state a rule for applicants of all countries (2026-11-22): stories only about one foreign nationality's applicants (Indian NZ approval-rate data at 64.1%, Indian PhD post-study rights, visas 'for Indians', Ireland refusals of Indian applicants, a jobs guide for Nigerians) are excluded from the homepage list at ingest, after enrichment, in the pinned-zone merge and on every read of a cached payload — homepage display only, the category archive keeps its data. A bare comparison mention ('India lags behind China') does not count as involving Chinese applicants. In Chinese headlines of the shape 'X国留学生 / X国申请人', X is the applicants' nationality, not the destination (2026-11-22): 《越南留学生如何在加拿大申请留学》 is about Vietnamese applicants applying to Canada and leaves the homepage, while pieces treating Vietnam as the destination （去越南留学 / 越南学生签证规则） and all-applicant content (a Stanford graduate-union petition, a Bowdoin international-student admissions page) stay. One event, one entry: exact duplicates (same title/source/day) and same-event retellings are merged, keeping the official/newest version; the NZ student-visa statistics release is one named event, so its retellings collapse to a single entry before the applicant rule is applied. Student-visa and post-study-work-visa changes carry visa=true and live in a fixed zone (pinned=true): they persist across daily refreshes and are only removed when superseded by a newer item on the same topic, expired, or ruled not applicable. Unclear eligibility stays 'unclear' and is never presented as diploma-eligible. Immigration items carry an identityLabel.",
+      "Returns decision-changing overseas opportunities and policy changes for a Chinese 专科 (diploma) student across the US, New Zealand, Singapore, Vietnam, Japan, South Korea, Ireland and the UK: what changed, who it applies to and when it takes effect, with the original university/government link. Applicability is checked BEFORE pinning (2026-11-22): an item that clearly does not apply to the user — bachelor_only, or its own text says 不适用于我 / 不含信息安全技术应用 — is excluded from the column entirely, fixed visa zone included (so the zone holds the Yale D/S ruling, Singapore MOM thresholds, the Japan language-school rule and — since 2026-11-22, as a hand-verified curated pin exempt from the rotating list's nationality filter — the NZ Short-term Graduate Work Visa labelled as a future path (usable only after completing an NZQCF Level 5–7 qualification in NZ; the user's Jiangxi diploma does not itself qualify, and it is a different visa from the bachelor-only NZ PSWV expansion); the bachelor-only NZ PSWV/UK items and the Korea pilot are out). Homepage selection also requires the item to involve Chinese applicants or state a rule for applicants of all countries (2026-11-22): stories only about one foreign nationality's applicants (Indian NZ approval-rate data at 64.1%, Indian PhD post-study rights, visas 'for Indians', Ireland refusals of Indian applicants, a jobs guide for Nigerians) are excluded from the homepage list at ingest, after enrichment, in the pinned-zone merge and on every read of a cached payload — homepage display only, the category archive keeps its data. A bare comparison mention ('India lags behind China') does not count as involving Chinese applicants. In Chinese headlines of the shape 'X国留学生 / X国申请人', X is the applicants' nationality, not the destination (2026-11-22): 《越南留学生如何在加拿大申请留学》 is about Vietnamese applicants applying to Canada and leaves the homepage, while pieces treating Vietnam as the destination （去越南留学 / 越南学生签证规则） and all-applicant content (a Stanford graduate-union petition, a Bowdoin international-student admissions page) stay. One event, one entry: exact duplicates (same title/source/day) and same-event retellings are merged, keeping the official/newest version; the NZ student-visa statistics release is one named event, so its retellings collapse to a single entry before the applicant rule is applied. Student-visa and post-study-work-visa changes carry visa=true and live in a fixed zone (pinned=true): they persist across daily refreshes and are only removed when superseded by a newer item on the same topic, expired, or ruled not applicable. Unclear eligibility stays 'unclear' and is never presented as diploma-eligible. Immigration items carry an identityLabel. Policy cards (kind=policy) state only whom the policy affects (2026-11-22): their relevance text never uses application wording, no application deadline is exposed for them, and the client hides the eligibility badge and deadline fields — only genuinely open programmes/jobs show those. The NZ Short-term Graduate Work Visa's status label is computed at read time from its effective date 2026-11-23 against the current date in Pacific/Auckland (before that date it reads 即将生效， on/after it 已生效）; its 「11月23日起」 wording and 未来路径 note are unchanged. The NIC Winter Internship (India.com, Rs 20,000) is deterministically filed under 海外实习、工作与签证 (category work_visa, stage intern, kind job) at ingest and on every read: verified offline at NIC Headquarters, New Delhi, not remote from China; whether students in China may apply is unstated in the official notification, so eligibility stays 'unclear' / acceptsOverseas unstated, and it is excluded from the 近期可申请 digest.",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -4150,6 +4262,10 @@ export const Actions = {
       for (const raw of ov.items) {
         const it = normalizeOverseas(raw);
         if (it.kind === "policy") continue; // a policy is never an application target
+        // NIC Winter Internship (user rule, 2026-11-22): whether a student
+        // in China may apply is unstated in the official notification, so
+        // it is never presented as currently applicable.
+        if (isNicWinterInternship(it)) continue;
         // Only genuinely actionable items qualify: an actual job posting, a
         // stated application deadline, or a source-confirmed diploma-eligible
         // opening. Plain news about overseas study never counts as 可申请.
@@ -4230,4 +4346,4 @@ export const Actions = {
       return { ok: true, refreshedAt: new Date().toISOString() };
     },
   }),
-}
+};
