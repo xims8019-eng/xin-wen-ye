@@ -5,25 +5,25 @@
 // is a no-op (there is no hosted query cache to invalidate — the client
 // refetches with react-query instead).
 //
-// IMPORTANT — why the database client is the pure-HTTP one:
+// IMPORTANT — why the database client is the pure-HTTP one, and why there
+// is NO local `file:` fallback in this file:
 // `@libsql/client`'s default Node entry eagerly imports the native NAPI
 // package `libsql`, which loads its platform binary with a computed
-// dynamic `require("@libsql/" + target)`. Vercel's file tracer
-// (@vercel/nft) cannot trace that dynamic require, so the `.node` binary
-// is dropped from the serverless bundle and the function dies at import
-// time with `Cannot find module '@libsql/linux-x64-gnu'` —
+// dynamic `require("@libsql/" + target)`, and it also pulls in the `ws`
+// package. Vercel's bundler (esbuild) INLINES a dynamic
+// `import("@libsql/client")` into the serverless bundle even when the
+// branch is never taken at runtime, so that CJS native-loader code runs
+// at module-evaluation time and dies with
+// `Dynamic require of "events" is not supported` —
 // FUNCTION_INVOCATION_FAILED before any handler (or its try/catch) runs.
-// `drizzle-orm/libsql` has the same problem: its driver imports
-// `createClient` from `@libsql/client` at runtime.
-// The fix is to use the pure-JavaScript Hrana-over-HTTP client
-// (`@libsql/client/http` + `drizzle-orm/libsql/http`) for every remote
-// database URL. It has no native code at all, so there is nothing for the
-// bundler to drop. The local `file:` fallback below is only for local
-// development and is loaded with a dynamic `import()`, so it never enters
-// the serverless bundle's static import graph.
+// The previous fix (lazy dynamic import) did not help for exactly this
+// reason: lazy at runtime is not lazy at bundle time. The only safe fix
+// is to never reference `@libsql/client` (without `/http`) anywhere in
+// the server code, so the native binding never enters the bundle graph.
+// `drizzle-orm/libsql` has the same problem; only
+// `@libsql/client/http` + `drizzle-orm/libsql/http` (pure JavaScript
+// Hrana-over-HTTP, no native code at all) may be used.
 
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
 import { createClient as createHttpClient } from "@libsql/client/http";
 import { drizzle as drizzleHttp } from "drizzle-orm/libsql/http";
 import type { LibSQLDatabase } from "drizzle-orm/libsql/driver-core";
@@ -67,9 +67,14 @@ let initPromise: Promise<Ctx> | null = null;
 
 /**
  * Returns the process-wide singleton context. The first call opens the
- * database (Turso over plain HTTPS when TURSO_DATABASE_URL is set,
- * otherwise a local SQLite file at ./data/app.db for local development)
- * and creates the tables if needed.
+ * database (Turso over plain HTTPS — TURSO_DATABASE_URL is required) and
+ * creates the tables if needed.
+ *
+ * There is deliberately no local `file:` fallback: any reference to
+ * `@libsql/client` (without `/http`) would pull the native binding into
+ * the serverless bundle and crash the function at import time (see the
+ * header comment). A missing TURSO_DATABASE_URL therefore throws a clear
+ * error, which the API handlers turn into a readable JSON 500.
  *
  * A failed first attempt clears `initPromise` so a later call can retry
  * instead of reusing the rejected promise; the API handlers already turn
@@ -81,33 +86,19 @@ export function getCtx(): Promise<Ctx> {
   initPromise = (async (): Promise<Ctx> => {
     try {
       const url = process.env.TURSO_DATABASE_URL;
-      let db: LibSQLDatabase<typeof schema>;
-      if (url) {
-        // Remote Turso over HTTPS — pure JS, no native binding anywhere
-        // in this import graph.
-        const client = createHttpClient({
-          url,
-          authToken: process.env.TURSO_AUTH_TOKEN,
-        });
-        db = drizzleHttp(client, { schema });
-        await client.executeMultiple(CREATE_TABLES_SQL);
-      } else {
-        // Local development only. Loaded lazily so the native `libsql`
-        // binding never appears in the serverless bundle's static
-        // imports; if it cannot load here, the error surfaces as a
-        // readable JSON 500 from the handler instead of a cold-start crash.
-        const fileUrl = "file:./data/app.db";
-        const filePath = fileUrl.slice("file:".length);
-        const dir = dirname(filePath);
-        if (dir && dir !== ".") mkdirSync(dir, { recursive: true });
-        const [{ createClient }, { drizzle }] = await Promise.all([
-          import("@libsql/client"),
-          import("drizzle-orm/libsql"),
-        ]);
-        const client = createClient({ url: fileUrl });
-        db = drizzle(client, { schema });
-        await client.executeMultiple(CREATE_TABLES_SQL);
+      if (!url) {
+        throw new Error(
+          "TURSO_DATABASE_URL 未配置：请在 Vercel 项目的环境变量里设置 Turso 数据库地址（libsql://…），并同时设置 TURSO_AUTH_TOKEN",
+        );
       }
+      // Remote Turso over HTTPS — pure JS, no native binding anywhere
+      // in this import graph.
+      const client = createHttpClient({
+        url,
+        authToken: process.env.TURSO_AUTH_TOKEN,
+      });
+      const db = drizzleHttp(client, { schema });
+      await client.executeMultiple(CREATE_TABLES_SQL);
       cached = {
         db,
         inference: createInference(),
