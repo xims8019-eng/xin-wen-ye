@@ -28,6 +28,7 @@ function defineAction<Req extends z.ZodTypeAny, Res extends z.ZodTypeAny>(def: {
 // ---------------------------------------------------------------------------
 // Source definitions
 // ---------------------------------------------------------------------------
+
 const UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
 
@@ -2399,6 +2400,11 @@ function isIndiaNzFtaEventText(text: string): boolean {
  * each other — the shape of one story retold by several outlets.
  */
 function sameOverseasEvent(a: OverseasItem, b: OverseasItem): boolean {
+  // The NIC Winter Internship project: retellings (NDTV / India.com /
+  // Moneycontrol / JagranJosh…) share neither wording nor a common
+  // distinctive title number, so the project matcher decides — any two
+  // items of this project are the same event.
+  if (isNicWinterInternship(a) && isNicWinterInternship(b)) return true;
   // Named cross-outlet events whose titles share no distinctive number.
   if (
     isIndiaNzFtaEventText(`${a.title} ${a.whatChanged ?? ""}`) &&
@@ -2831,7 +2837,7 @@ function overseasHomepageItems(items: OverseasItem[]): OverseasItem[] {
 
 async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: OverseasItem[]; asOf: string }> {
   if (!force) {
-    const cached = await readCache<OverseasItem[]>(ctx, "overseas:all:v17", OVERSEAS_TTL_MS);
+    const cached = await readCache<OverseasItem[]>(ctx, "overseas:all:v18", OVERSEAS_TTL_MS);
     if (cached) return { items: overseasHomepageItems(cached.data), asOf: cached.asOf };
   }
   const raw: FeedItem[] = [];
@@ -2905,11 +2911,11 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
 
   if (deduped.length === 0) {
     await noteRefreshFailure(ctx);
-    const stale = await readCacheStale<OverseasItem[]>(ctx, "overseas:all:v17");
+    const stale = await readCacheStale<OverseasItem[]>(ctx, "overseas:all:v18");
     if (stale) return { items: overseasHomepageItems(stale.data), asOf: stale.asOf };
     // Even with no fresh search results, the fixed visa zone stands.
     const pinnedOnly = await mergePinnedVisaItems(ctx, []);
-    const asOf = await writeCache(ctx, "overseas:all:v17", pinnedOnly);
+    const asOf = await writeCache(ctx, "overseas:all:v18", pinnedOnly);
     return { items: pinnedOnly, asOf };
   }
 
@@ -3131,7 +3137,13 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
   // leave the same way, judged on title + the enriched applicability
   // fields, so an unenriched headline and an enriched one are held to the
   // same deterministic rule.
-  const applicable = items.filter((it) => !isNotApplicableToUser(it) && !isForeignApplicantsOnlyItem(it));
+  // Project-level merge (user rule, 2026-11-22): all retellings of the
+  // NIC Winter Internship project collapse to ONE entry at ingest —
+  // the NDTV item stays as representative — before the generic
+  // same-event dedupe below runs.
+  const applicable = collapseNicProjectItems(
+    items.filter((it) => !isNotApplicableToUser(it) && !isForeignApplicantsOnlyItem(it)),
+  );
   // One event, one entry — also across the rotating list: same-event
   // retellings collapse to one, preferring the official source, then the
   // newest version.
@@ -3176,7 +3188,7 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
     bounded[url] = e;
   }
   await writeCache(ctx, "overseas:enrich:v2", bounded);
-  const asOf = await writeCache(ctx, "overseas:all:v17", all);
+  const asOf = await writeCache(ctx, "overseas:all:v18", all);
   return { items: all, asOf };
 }
 
@@ -3484,35 +3496,104 @@ export function policyStatusOnDate(
 }
 
 /**
- * The NIC (National Informatics Centre, under India's MeitY) Winter
- * Internship item — reported by India.com et al. with a Rs 20,000 total
- * stipend. Matched on the headline / URL slug so every retelling of the
- * same programme is corrected the same way.
+ * Project-level matcher for the NIC (National Informatics Centre, under
+ * India's MeitY) Winter Internship 2026 — ONE programme retold by many
+ * outlets whose headlines share almost no wording (user-verified
+ * 2026-11-22 by reading the NDTV original: its article opens "NIC Winter
+ * Internship 2026: The National Informatics Centre (NIC), under the
+ * Ministry of Electronics and Information Technology (MeitY)… two-month
+ * Winter Internship Programme 2026", and its facts match the India.com
+ * piece exactly — NIC under MeitY, winter 2026, two months
+ * 2026-12-01 → 2027-01-31, 50 seats, Rs 10,000/month = Rs 20,000 total,
+ * registration via dii.nic.in from Nov 2, offline at NIC HQ, New Delhi).
+ * The NDTV headline itself — "Ministry Of Electronics And IT Offers
+ * Two-Month Internship With Rs 20,000 Stipend" — never says "NIC", so a
+ * title-only NIC match misses the very item the user keeps as the
+ * representative. Matching therefore runs over title + summary text and
+ * accepts any of the programme's distinctive shapes: the NIC winter
+ * internship name, the National Informatics Centre as organiser of an
+ * internship, or the MeitY / Ministry of Electronics internship carrying
+ * the programme's stipend / two-month / winter signals (the shape of
+ * Moneycontrol / JagranJosh retellings too).
  */
-export function isNicWinterInternship(it: { title: string; url: string }): boolean {
-  return (
-    /nic[\s-]+winter[\s-]+internship/i.test(it.title) ||
-    /nic-winter-internship/i.test(it.url) ||
-    (/national informatics centre/i.test(it.title) && /winter internship/i.test(it.title))
-  );
+export function isNicInternshipProjectText(text: string): boolean {
+  const t = text ?? "";
+  if (/nic[\s-]+winter[\s-]+internship/i.test(t)) return true;
+  if (/national informatics centre/i.test(t) && /internship/i.test(t)) return true;
+  if (
+    /(ministry of electronics|\bmeity\b)/i.test(t) &&
+    /internship/i.test(t) &&
+    /(20,?000|two[\s-]?month|winter|stipend)/i.test(t)
+  )
+    return true;
+  if (/\bnic\b/i.test(t) && /internship/i.test(t) && /(20,?000|winter|stipend)/i.test(t)) return true;
+  return false;
+}
+
+export function isNicWinterInternship(it: {
+  title: string;
+  url: string;
+  whatChanged?: string | null;
+  points?: string[];
+}): boolean {
+  if (/nic-winter-internship/i.test(it.url)) return true;
+  return isNicInternshipProjectText(`${it.title} ${it.whatChanged ?? ""} ${(it.points ?? []).join(" ")}`);
 }
 
 /**
- * User-verified correction (2026-11-22) for the NIC Winter Internship:
- * the enrichment pass filed this INTERNSHIP under 海外升学 (study). It
- * belongs in 海外实习、工作与签证 as an in-study internship (kind=job,
- * stage=intern). Facts checked against the official NIC / MeitY Digital
- * India Internship notification as reported by India.com / NDTV /
- * Moneycontrol (all citing the official notification): the internship is
- * OFFLINE at NIC Headquarters, New Delhi (2026-12-01 → 2027-01-31, Rs
- * 10,000/month, Rs 20,000 total, 50 seats, applications via dii.nic.in) —
- * so location is New Delhi and it is NOT remote from China. Whether a
- * student enrolled at a Chinese institution may apply is NOT stated in
- * the notification coverage, so applicability stays honestly unstated:
- * eligibility "unclear" and acceptsOverseas null （未说明） — never
- * presented as applicable, and getDailyDigest excludes it from
- * 「近期可申请」. Applied at ingest and inside normalizeOverseas, so
- * cached payloads are corrected on every read too.
+ * One project, one entry (user rule, 2026-11-22): when several retellings
+ * of the NIC internship project are present, keep exactly one — the
+ * NDTV item as representative (the user verified the project against the
+ * NDTV original), else an official source, else the newest. Applied at
+ * ingest in loadOverseas and again on every getOverseas read, so a
+ * cached payload holding two retellings can never show the project
+ * twice; a later India.com / Moneycontrol / JagranJosh retelling is
+ * collapsed the same way instead of appearing as a second entry.
+ */
+export function collapseNicProjectItems<T extends { title: string; url: string; source: string; publishedAt: string | null; official: boolean; whatChanged?: string | null; points?: string[] }>(
+  items: T[],
+): T[] {
+  const nicIdx = items.map((it, i) => (isNicWinterInternship(it) ? i : -1)).filter((i) => i >= 0);
+  if (nicIdx.length <= 1) return items;
+  const rank = (it: T): [number, number, number] => [
+    /ndtv/i.test(it.source) || /ndtv\.com/i.test(it.url) ? 0 : 1,
+    it.official ? 0 : 1,
+    -(it.publishedAt ? new Date(it.publishedAt).getTime() : 0),
+  ];
+  let repIdx = nicIdx[0] as number;
+  for (const i of nicIdx) {
+    const a = rank(items[i] as T);
+    const b = rank(items[repIdx] as T);
+    if (a[0] < b[0] || (a[0] === b[0] && (a[1] < b[1] || (a[1] === b[1] && a[2] < b[2])))) repIdx = i;
+  }
+  const nicSet = new Set(nicIdx);
+  return items.filter((_, i) => !nicSet.has(i) || i === repIdx);
+}
+
+/**
+ * User-verified correction (2026-11-22) for the NIC Winter Internship
+ * project: the enrichment pass filed this INTERNSHIP under 海外升学
+ * (study). It belongs in 海外实习、工作与签证 as an in-study internship
+ * (kind=job, stage=intern). Facts verified by the user against the NDTV
+ * original (which itself opens with the NIC Winter Internship 2026
+ * announcement) and the India.com retelling — identical on every point:
+ * the internship is OFFLINE at NIC Headquarters, New Delhi
+ * (2026-12-01 → 2027-01-31, 50 seats, Rs 10,000/month, Rs 20,000 total,
+ * registration via the official portal dii.nic.in from Nov 2) — so
+ * location is New Delhi and it is NOT remote from China. Whether a
+ * student enrolled at a Chinese institution may apply is NOT stated:
+ * the coverage states only Indian local degree-programme / enrolment
+ * requirements, with no nationality restriction and no statement that
+ * overseas applications are accepted — so applicability stays honestly
+ * unstated: eligibility "unclear" and acceptsOverseas null （未说明） —
+ * never presented as applicable or as not applicable. Registration
+ * opened Nov 2 but the closing date is officially unconfirmed, so
+ * deadline is forced to null — never a fabricated date — and
+ * getDailyDigest excludes the project from 「近期可申请」. The merged
+ * entry carries the verified facts below (including the official entry
+ * dii.nic.in) whichever outlet's retelling survives as representative.
+ * Applied at ingest and inside normalizeOverseas, so cached payloads
+ * are corrected on every read too.
  */
 export function correctOverseasItem(it: OverseasItem): OverseasItem {
   if (!isNicWinterInternship(it)) return it;
@@ -3527,6 +3608,20 @@ export function correctOverseasItem(it: OverseasItem): OverseasItem {
     remoteFromChina: false,
     acceptsOverseas: null,
     visaSupport: "unstated",
+    deadline: null,
+    effectiveWhen: null,
+    whatChanged:
+      "印度国家信息中心（NIC，隶属电子信息技术部 MeitY）2026 年冬季实习项目：为期两个月（2026 年 12 月 1 日至 2027 年 1 月 31 日），共 50 个名额，津贴每月 10,000 卢比、两个月共 20,000 卢比；线下在印度新德里 NIC 总部进行，11 月 2 日起通过官方门户 dii.nic.in 注册。",
+    whoApplies:
+      "原文只写了印度本地学位课程与在读要求，没有写国籍限制，也没有写是否接受境外申请——中国境内学生能否申请，官方未确认。",
+    points: [
+      "主办：印度国家信息中心（NIC），隶属印度电子信息技术部（MeitY）；2026 年冬季实习项目，为期两个月（2026 年 12 月 1 日至 2027 年 1 月 31 日），共 50 个名额。",
+      "津贴：每月 10,000 卢比，两个月共 20,000 卢比。",
+      "地点：印度新德里 NIC 总部，线下进行；不能在中国境内远程参加。",
+      "报名：11 月 2 日起通过官方门户 dii.nic.in 注册；截止日期官方未确认。",
+      "中国境内学生能否申请：原文只写了印度本地学位课程与在读要求，没有写国籍限制，也没有写接受境外申请——官方未确认，适用性未说明。",
+    ],
+    titleOnly: false,
   };
 }
 
@@ -4173,7 +4268,7 @@ export const Actions = {
 
   getOverseas: defineAction({
     description:
-      "Returns decision-changing overseas opportunities and policy changes for a Chinese 专科 (diploma) student across the US, New Zealand, Singapore, Vietnam, Japan, South Korea, Ireland and the UK: what changed, who it applies to and when it takes effect, with the original university/government link. Applicability is checked BEFORE pinning (2026-11-22): an item that clearly does not apply to the user — bachelor_only, or its own text says 不适用于我 / 不含信息安全技术应用 — is excluded from the column entirely, fixed visa zone included (so the zone holds the Yale D/S ruling, Singapore MOM thresholds, the Japan language-school rule and — since 2026-11-22, as a hand-verified curated pin exempt from the rotating list's nationality filter — the NZ Short-term Graduate Work Visa labelled as a future path (usable only after completing an NZQCF Level 5–7 qualification in NZ; the user's Jiangxi diploma does not itself qualify, and it is a different visa from the bachelor-only NZ PSWV expansion); the bachelor-only NZ PSWV/UK items and the Korea pilot are out). Homepage selection also requires the item to involve Chinese applicants or state a rule for applicants of all countries (2026-11-22): stories only about one foreign nationality's applicants (Indian NZ approval-rate data at 64.1%, Indian PhD post-study rights, visas 'for Indians', Ireland refusals of Indian applicants, a jobs guide for Nigerians) are excluded from the homepage list at ingest, after enrichment, in the pinned-zone merge and on every read of a cached payload — homepage display only, the category archive keeps its data. A bare comparison mention ('India lags behind China') does not count as involving Chinese applicants. In Chinese headlines of the shape 'X国留学生 / X国申请人', X is the applicants' nationality, not the destination (2026-11-22): 《越南留学生如何在加拿大申请留学》 is about Vietnamese applicants applying to Canada and leaves the homepage, while pieces treating Vietnam as the destination （去越南留学 / 越南学生签证规则） and all-applicant content (a Stanford graduate-union petition, a Bowdoin international-student admissions page) stay. One event, one entry: exact duplicates (same title/source/day) and same-event retellings are merged, keeping the official/newest version; the NZ student-visa statistics release is one named event, so its retellings collapse to a single entry before the applicant rule is applied. Student-visa and post-study-work-visa changes carry visa=true and live in a fixed zone (pinned=true): they persist across daily refreshes and are only removed when superseded by a newer item on the same topic, expired, or ruled not applicable. Unclear eligibility stays 'unclear' and is never presented as diploma-eligible. Immigration items carry an identityLabel. Policy cards (kind=policy) state only whom the policy affects (2026-11-22): their relevance text never uses application wording, no application deadline is exposed for them, and the client hides the eligibility badge and deadline fields — only genuinely open programmes/jobs show those. The NZ Short-term Graduate Work Visa's status label is computed at read time from its effective date 2026-11-23 against the current date in Pacific/Auckland (before that date it reads 即将生效， on/after it 已生效）; its 「11月23日起」 wording and 未来路径 note are unchanged. The NIC Winter Internship (India.com, Rs 20,000) is deterministically filed under 海外实习、工作与签证 (category work_visa, stage intern, kind job) at ingest and on every read: verified offline at NIC Headquarters, New Delhi, not remote from China; whether students in China may apply is unstated in the official notification, so eligibility stays 'unclear' / acceptsOverseas unstated, and it is excluded from the 近期可申请 digest.",
+      "Returns decision-changing overseas opportunities and policy changes for a Chinese 专科 (diploma) student across the US, New Zealand, Singapore, Vietnam, Japan, South Korea, Ireland and the UK: what changed, who it applies to and when it takes effect, with the original university/government link. Applicability is checked BEFORE pinning (2026-11-22): an item that clearly does not apply to the user — bachelor_only, or its own text says 不适用于我 / 不含信息安全技术应用 — is excluded from the column entirely, fixed visa zone included (so the zone holds the Yale D/S ruling, Singapore MOM thresholds, the Japan language-school rule and — since 2026-11-22, as a hand-verified curated pin exempt from the rotating list's nationality filter — the NZ Short-term Graduate Work Visa labelled as a future path (usable only after completing an NZQCF Level 5–7 qualification in NZ; the user's Jiangxi diploma does not itself qualify, and it is a different visa from the bachelor-only NZ PSWV expansion); the bachelor-only NZ PSWV/UK items and the Korea pilot are out). Homepage selection also requires the item to involve Chinese applicants or state a rule for applicants of all countries (2026-11-22): stories only about one foreign nationality's applicants (Indian NZ approval-rate data at 64.1%, Indian PhD post-study rights, visas 'for Indians', Ireland refusals of Indian applicants, a jobs guide for Nigerians) are excluded from the homepage list at ingest, after enrichment, in the pinned-zone merge and on every read of a cached payload — homepage display only, the category archive keeps its data. A bare comparison mention ('India lags behind China') does not count as involving Chinese applicants. In Chinese headlines of the shape 'X国留学生 / X国申请人', X is the applicants' nationality, not the destination (2026-11-22): 《越南留学生如何在加拿大申请留学》 is about Vietnamese applicants applying to Canada and leaves the homepage, while pieces treating Vietnam as the destination （去越南留学 / 越南学生签证规则） and all-applicant content (a Stanford graduate-union petition, a Bowdoin international-student admissions page) stay. One event, one entry: exact duplicates (same title/source/day) and same-event retellings are merged, keeping the official/newest version; the NZ student-visa statistics release is one named event, so its retellings collapse to a single entry before the applicant rule is applied. Student-visa and post-study-work-visa changes carry visa=true and live in a fixed zone (pinned=true): they persist across daily refreshes and are only removed when superseded by a newer item on the same topic, expired, or ruled not applicable. Unclear eligibility stays 'unclear' and is never presented as diploma-eligible. Immigration items carry an identityLabel. Policy cards (kind=policy) state only whom the policy affects (2026-11-22): their relevance text never uses application wording, no application deadline is exposed for them, and the client hides the eligibility badge and deadline fields — only genuinely open programmes/jobs show those. The NZ Short-term Graduate Work Visa's status label is computed at read time from its effective date 2026-11-23 against the current date in Pacific/Auckland (before that date it reads 即将生效， on/after it 已生效）; its 「11月23日起」 wording and 未来路径 note are unchanged. The NIC Winter Internship 2026 is ONE project however many outlets retell it (user-verified 2026-11-22 against the NDTV original, whose article opens with the NIC announcement): NDTV's 'Ministry Of Electronics And IT Offers Two-Month Internship With Rs 20,000 Stipend', India.com's 'NIC Winter Internship 2026' and any Moneycontrol / JagranJosh retelling are the same programme, so the project is merged at ingest and on every read to a single entry with the NDTV item as representative, carrying the verified facts (NIC under MeitY; two months, 2026-12-01 to 2027-01-31; 50 seats; Rs 10,000/month, Rs 20,000 total; official entry dii.nic.in, registration open since Nov 2, closing date officially unconfirmed so no deadline is ever shown). It is deterministically filed under 海外实习、工作与签证 (category work_visa, stage intern, kind job), never 海外升学： verified offline at NIC Headquarters, New Delhi, not remote from China; whether students in China may apply is unstated in the source (it states only Indian local degree/enrolment requirements, no nationality rule either way), so eligibility stays 'unclear' / acceptsOverseas unstated — neither applicable nor not applicable — and it is excluded from the 近期可申请 digest.",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -4182,7 +4277,11 @@ export const Actions = {
     }),
     async handler(ctx, args) {
       const { items, asOf } = await loadOverseas(ctx, args.force);
-      const normalized = items.map(normalizeOverseas);
+      // Read-time project merge (user rule, 2026-11-22): even a payload
+      // cached before the merge rule existed collapses the NIC Winter
+      // Internship project's retellings to the single NDTV
+      // representative on every read.
+      const normalized = collapseNicProjectItems(items.map(normalizeOverseas));
       return { items: normalized, asOf, hasTodayUpdate: items.some((it) => isTodayShanghai(it.publishedAt)) };
     },
   }),
