@@ -26,11 +26,13 @@
 ## 同一事件只留一条（去重）
 
 - 通用层：按链接去重；「我关注的世界」再按标题归一化键（去空格标点取前 14 字）合并同一事件。
-- 签证固定区有五个「同一事件只留一条」的事件匹配器，命中转述就在入库和固定区合并两处丢弃：美国 D/S 裁决（`isDsRulingEventText`，含「学生签证 + 禁令/固定期限」的英文形态）、新西兰毕业后工签扩大（`isNzPswvEventText`）、英国毕业生签证缩短（`isUkGraduateCutEventText`）、日本语言学校 A1 证明新规（`isJpLanguageSchoolEventText`）、韩国 16 专业技术试点（`isKrTechPilotEventText`）。每个事件只保留人工核实的那一条（见 `config/columns.json` 的 `pinnedVisaItems`）。
+- 签证固定区有五个「同一事件只留一条」的事件匹配器，命中转述就在入库和固定区合并两处丢弃：美国 D/S 裁决（`isDsRulingEventText`，含「学生签证 + 禁令/固定期限」的英文形态；2026-11-22 起也识别「4-year cap / 4 年上限」这类对固定期限提案的说法，MSN 等转载的同事件旧闻并入耶鲁那条、不单独置顶）、新西兰毕业后工签扩大（`isNzPswvEventText`）、英国毕业生签证缩短（`isUkGraduateCutEventText`）、日本语言学校 A1 证明新规（`isJpLanguageSchoolEventText`）、韩国 16 专业技术试点（`isKrTechPilotEventText`）。每个事件只保留人工核实的那一条（见 `config/columns.json` 的 `pinnedVisaItems`）。
+- 海外轮换列表 2026-11-22 起按事件去重（`sameOverseasEvent`）：标题归一化（去空格标点、小写）完全相同即同事件，不限日期（这条治的是标题、来源、日期都相同的重复报道）；否则要求同国家、共享一个 2 位以上显著数字、标题字符集相似度 ≥0.6、发布日期相差 7 天以内。印度–新西兰自贸协定的两篇报道标题没有显著数字，另有具名匹配器 `isIndiaNzFtaEventText`（印度 + 新西兰 + FTA/自贸/新增工作签证），命中只留官方/最新一条。
 
 ## 屏蔽与禁用名单
 
 - **中国境内打不开**（`CN_BLOCKED_DOMAINS`）：目前只有 `wfyi.org`（Amazon CloudFront 配置为屏蔽中国访问，用户 2026-11-21 在中国境内实测 403 确认）。命中条目保留页内中文摘要、标「中国境内打不开」、不给出打不开的原文按钮；有已验证可访问的官方/替代链接时给替代链接。这份名单只收用户在中国境内实测确认的域名——境外服务器抓取结果证明不了中国境内能不能打开，不要凭抓取结果往里加。
 - **固定区禁用来源**（`PINNED_VISA_BLOCKED_HOSTS`）：`dayonekorea.com`、`gistreel.com`。前者是商业博客冒充韩国法务部原文，后者是新西兰工签事件的转述且生效日期写错；两个域名被硬性禁止进入签证固定区（按条目链接和阅读链接双查）。
 - **海外栏旧评论清理**（`isStaleVisaOpinionItem`）：意见/评论/社论类的学生签证文章超过 45 天不收；另有两篇 2026 年 8 月的评论（Good Men Project、independent.org）按标题+来源点名删除，入库前就丢弃，刷新不会把它们带回来。
+- **江西栏首页隐藏**（`isJiangxiHiddenNoise`，2026-11-22）：培训机构营销标题（机构评测/测评、十大机构、哪家好、选机构、排行榜）和高考择校文章（面向高考生选大专，含 gaokao.eol.cn 及一切 gaokao.* 域名）入库时丢弃。
 - **需要登录提示**：标题或来源命中纽约时报、华尔街日报、金融时报、经济学人、彭博、财新等关键词时，条目标 `needsLogin`，页面在原文按钮旁提示「该来源可能需要登录/订阅」（只是提示，不屏蔽）。

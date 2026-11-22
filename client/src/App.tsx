@@ -8,6 +8,24 @@ type LearningCategory = LearningItem["category"];
 type JiangxiItem = ApiResponse<typeof api, "getJiangxi">["items"][number];
 type OverseasItem = ApiResponse<typeof api, "getOverseas">["items"][number];
 type WorldItem = ApiResponse<typeof api, "getMyWorld">["daily"][number];
+type DigestItem = ApiResponse<typeof api, "getDailyDigest">["items"][number];
+type HotSource = ApiResponse<typeof api, "getHotLists">["sources"][number];
+
+const OVERSEAS_COUNTRIES = ["美国", "新西兰", "新加坡", "越南", "日本", "韩国", "爱尔兰", "英国"];
+const STUDY_STAGES: Array<{ id: string; label: string }> = [
+  { id: "prepare", label: "在读可准备" },
+  { id: "diploma", label: "专科毕业可申请" },
+  { id: "bachelor", label: "本科毕业可申请" },
+];
+const WORK_STAGES: Array<{ id: string; label: string }> = [
+  { id: "intern", label: "在读实习" },
+  { id: "direct", label: "专科毕业后从中国直接求职" },
+  { id: "overseas_job", label: "海外留学期间及毕业后就业" },
+];
+function stageLabel(item: OverseasItem): string {
+  const map = item.category === "study" ? STUDY_STAGES : WORK_STAGES;
+  return map.find((x) => x.id === item.stage)?.label ?? (item.category === "work_visa" && item.kind === "policy" ? "签证/移民政策" : "阶段未说明");
+}
 type Tab = "home" | "news" | "learning" | "feeds" | "saved";
 
 const LEARNING_CATEGORIES: Array<{ id: LearningCategory; label: string }> = [
@@ -240,7 +258,7 @@ function ItemDetail({ item }: { item: NewsItem }) {
   );
 }
 
-function ArticleRow({ item }: { item: NewsItem }) {
+function ArticleRow({ item, relevance }: { item: NewsItem; relevance?: string }) {
   const [open, setOpen] = useState(false);
   return (
     <li className="border-b border-[var(--border)] py-3">
@@ -253,13 +271,19 @@ function ArticleRow({ item }: { item: NewsItem }) {
           className="min-w-0 flex-1 text-left"
         >
           <p className="font-headline text-[17px] font-bold leading-snug text-[var(--text)]">{item.title}</p>
+          {relevance ? (
+            <p className="mt-1 text-sm leading-relaxed text-[var(--dim)]">
+              <span className="font-medium text-[var(--text)]">和我有什么关系：</span>
+              {relevance}
+            </p>
+          ) : null}
           <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-xs text-[var(--dim)]">
             <span className="font-medium text-[var(--text)]">{item.source}</span>
             {item.publishedAt ? (
               <>
                 <span aria-hidden="true">·</span>
                 <span>
-                  {formatPubTime(item.publishedAt)} · {relativeTime(item.publishedAt)}
+                  发布于 {formatPubTime(item.publishedAt)} · {relativeTime(item.publishedAt)}
                 </span>
               </>
             ) : null}
@@ -273,6 +297,7 @@ function ArticleRow({ item }: { item: NewsItem }) {
     </li>
   );
 }
+
 
 function LearningRow({ item }: { item: LearningItem }) {
   const [open, setOpen] = useState(false);
@@ -290,9 +315,10 @@ function LearningRow({ item }: { item: LearningItem }) {
           className="min-w-0 flex-1 text-left"
         >
           <p className="font-headline text-[17px] font-bold leading-snug text-[var(--text)]">{item.title}</p>
-          {item.summaryZh ? (
-            <p className="mt-1 text-sm leading-relaxed text-[var(--dim)]">{item.summaryZh}</p>
-          ) : null}
+          <p className="mt-1 text-sm leading-relaxed text-[var(--dim)]">
+            <span className="font-medium text-[var(--text)]">和我有什么关系：</span>
+            {item.relevance}
+          </p>
           <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-[var(--dim)]">
             <span className="rounded-full border border-[var(--border)] px-2 py-0.5 font-medium text-[var(--text)]">{catLabel}</span>
             <span className="font-medium text-[var(--text)]">{item.source}</span>
@@ -448,7 +474,7 @@ function LearningSection({ onGoLearning }: { onGoLearning: () => void }) {
   return (
     <section aria-label="学习栏目" className="mt-10 border-t-2 border-[var(--text)] pt-5">
       <div className="flex items-center justify-between gap-3">
-        <h3 className="font-headline text-xl font-black text-[var(--text)]">学习</h3>
+        <h3 className="font-headline text-xl font-black text-[var(--text)]">本周学习 · 学习与实践</h3>
         <div className="flex shrink-0 items-center gap-2">
           {learning.data ? <span className="hidden text-xs text-[var(--dim)] sm:inline">更新于 {clockTime(learning.data.asOf)}</span> : null}
           <button
@@ -462,7 +488,9 @@ function LearningSection({ onGoLearning }: { onGoLearning: () => void }) {
           </button>
         </div>
       </div>
-      <p className="mt-1 text-xs text-[var(--dim)]">面向学生 · 课程与讲座 / 学习资源 / 学生机会 · 最新发布的排在前面</p>
+      <p className="mt-1 text-xs text-[var(--dim)]">技能竞赛、免费课程或实验、语言学习和语言考试报名 · 只保留现在还能报名、能看回放或能直接开始学的内容 · 实习岗位统一在「海外实习、工作与签证」栏，
+        <button type="button" className="font-medium text-[var(--accent)]" onClick={() => document.getElementById("overseas-work")?.scrollIntoView({ behavior: "smooth" })}>点这里去看实习与岗位 →</button>
+      </p>
 
       <div className="mt-4">
         <DeadlineAlerts deadlines={learning.data?.deadlines ?? []} />
@@ -581,25 +609,32 @@ function JiangxiRow({ item }: { item: JiangxiItem }) {
           <span className="rounded-full bg-[var(--space-surface-alt)] px-2 py-0.5 text-[var(--text)]">
             适用年份：{item.applicableYear ?? "未注明"}
           </span>
-          {item.isReference ? (
-            <span className="rounded-full bg-[var(--space-surface-alt)] px-2 py-0.5 font-medium text-[var(--dim)]">备考参考</span>
+          {item.noticeKind === "formal2028" ? (
+            <span className="rounded-full bg-[var(--accent)] px-2 py-0.5 font-medium text-white">2028 届正式通知</span>
+          ) : item.noticeKind === "reference" ? (
+            <span className="rounded-full bg-[var(--space-surface-alt)] px-2 py-0.5 font-medium text-[var(--dim)]">往年备考参考</span>
           ) : (
-            <span className="rounded-full bg-[var(--accent)] px-2 py-0.5 font-medium text-white">与我相关 · 2028 年</span>
+            <span className="rounded-full border border-[var(--border)] px-2 py-0.5 font-medium text-[var(--dim)]">尚待确认的动态</span>
           )}
+          {item.canApplyMajor === true ? (
+            <span className="rounded-full bg-[var(--accent)] px-2 py-0.5 font-medium text-white">按正式专业对照：我的专业可报考</span>
+          ) : item.canApplyMajor === false ? (
+            <span className="rounded-full bg-[var(--space-surface-alt)] px-2 py-0.5 font-medium text-[var(--dim)]">按正式专业对照：我的专业不可报考</span>
+          ) : null}
           {item.official ? (
             <span className="rounded-full bg-[var(--space-surface-alt)] px-2 py-0.5 text-[var(--text)]">官方来源</span>
           ) : item.repost ? (
             <span className="rounded-full border border-[var(--border)] px-2 py-0.5 font-medium text-[var(--dim)]">转载</span>
           ) : null}
           <span className="font-medium text-[var(--text)]">{item.source}</span>
-          {item.publishedAt ? <span>· {formatDateOnly(item.publishedAt)}</span> : null}
+          {item.publishedAt ? <span>· 发布于 {formatDateOnly(item.publishedAt)}</span> : null}
           {item.titleOnly ? (
             <span className="rounded-full border border-[var(--border)] px-2 py-0.5 font-medium text-[var(--dim)]">仅有标题</span>
           ) : null}
           <span className="text-[var(--accent)]">· {open ? "收起 ▴" : "展开看要点 ▾"}</span>
         </p>
         <p className="mt-1.5 text-sm leading-relaxed text-[var(--dim)]">
-          <span className="font-medium text-[var(--text)]">与我的关系：</span>
+          <span className="font-medium text-[var(--text)]">和我有什么关系：</span>
           {item.relevance}
         </p>
         <p className="mt-0.5 text-sm leading-relaxed text-[var(--dim)]">
@@ -724,8 +759,20 @@ function OverseasRow({ item }: { item: OverseasItem }) {
         className="block w-full text-left"
       >
         <p className="font-headline text-[17px] font-bold leading-snug text-[var(--text)]">{item.title}</p>
+        <p className="mt-1 text-sm leading-relaxed text-[var(--dim)]">
+          <span className="font-medium text-[var(--text)]">和我有什么关系：</span>
+          {item.relevance}
+        </p>
         <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-[var(--dim)]">
           <span className="rounded-full border border-[var(--border)] px-2 py-0.5 font-medium text-[var(--text)]">{item.country}</span>
+          <span className="rounded-full border border-[var(--border)] px-2 py-0.5 font-medium text-[var(--text)]">{stageLabel(item)}</span>
+          {item.kind === "policy" ? (
+            <span className="rounded-full bg-[var(--space-surface-alt)] px-2 py-0.5 font-medium text-[var(--text)]">
+              政策 · 非岗位{item.policyStatus === "enacted" ? " · 已生效" : item.policyStatus === "proposal" ? " · 提案/计划" : " · 生效状态未说明"}
+            </span>
+          ) : item.kind === "job" ? (
+            <span className="rounded-full bg-[var(--accent)] px-2 py-0.5 font-medium text-white">岗位</span>
+          ) : null}
           {item.visa ? (
             <span className="rounded-full bg-[var(--accent)] px-2 py-0.5 font-medium text-white">签证{item.pinned ? " · 固定" : ""}</span>
           ) : null}
@@ -745,12 +792,16 @@ function OverseasRow({ item }: { item: OverseasItem }) {
             <span className="rounded-full bg-[var(--space-surface-alt)] px-2 py-0.5 text-[var(--text)]">大学/政府原文</span>
           ) : null}
           <span className="font-medium text-[var(--text)]">{item.source}</span>
-          {item.publishedAt ? <span>· {formatDateOnly(item.publishedAt)}</span> : null}
+          {item.publishedAt ? <span>· 发布于 {formatDateOnly(item.publishedAt)}</span> : null}
           {item.titleOnly ? (
             <span className="rounded-full border border-[var(--border)] px-2 py-0.5 font-medium text-[var(--dim)]">仅有标题</span>
           ) : null}
           {item.blockedReason ? <BlockedBadge /> : null}
-          <span className="text-[var(--accent)]">· {open ? "收起 ▴" : "展开看要点 ▾"}</span>
+          <span className="text-[var(--accent)]">· {open ? "收起 ▴" : "展开看条件 ▾"}</span>
+        </p>
+        <p className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-[var(--dim)]">
+          <span>政策生效：{item.effectiveWhen ?? "未公布"}</span>
+          <span>申请截止：{item.deadline ?? "未说明"}</span>
         </p>
         <dl className="mt-1.5 space-y-0.5 text-sm leading-relaxed text-[var(--dim)]">
           <div>
@@ -790,6 +841,32 @@ function OverseasRow({ item }: { item: OverseasItem }) {
               </ul>
             </>
           ) : null}
+          <dl className="mt-3 space-y-1 border-t border-[var(--border)] pt-2 text-sm leading-relaxed text-[var(--dim)]">
+            {item.category === "study" ? (
+              <>
+                <div><dt className="inline font-medium text-[var(--text)]">专业匹配：</dt><dd className="inline">{item.majorMatch ?? "未说明"}</dd></div>
+                <div><dt className="inline font-medium text-[var(--text)]">语言要求：</dt><dd className="inline">{item.languageReq ?? "未说明"}</dd></div>
+                <div><dt className="inline font-medium text-[var(--text)]">学费：</dt><dd className="inline">{item.tuition ?? "未说明（暂不按价格过滤，先展示）"}</dd></div>
+                <div><dt className="inline font-medium text-[var(--text)]">预计生活费：</dt><dd className="inline">{item.livingCost ?? "未说明"}</dd></div>
+                <div><dt className="inline font-medium text-[var(--text)]">奖学金：</dt><dd className="inline">{item.scholarship ?? "未说明"}</dd></div>
+              </>
+            ) : item.kind === "job" ? (
+              <>
+                <div><dt className="inline font-medium text-[var(--text)]">工作地点：</dt><dd className="inline">{item.location ?? item.country}</dd></div>
+                <div><dt className="inline font-medium text-[var(--text)]">能否在中国境内远程参加：</dt><dd className="inline">{item.remoteFromChina === true ? "可以" : item.remoteFromChina === false ? "不可以" : "未说明"}</dd></div>
+                <div><dt className="inline font-medium text-[var(--text)]">学历要求：</dt><dd className="inline">{item.eduReq ?? "未说明"}</dd></div>
+                <div><dt className="inline font-medium text-[var(--text)]">经验要求：</dt><dd className="inline">{item.expReq ?? "未说明"}</dd></div>
+                <div><dt className="inline font-medium text-[var(--text)]">是否接受境外申请：</dt><dd className="inline">{item.acceptsOverseas === true ? "接受" : item.acceptsOverseas === false ? "不接受" : "未说明"}</dd></div>
+                <div><dt className="inline font-medium text-[var(--text)]">签证支持：</dt><dd className="inline">{item.visaSupport === "yes" ? "雇主明确提供" : item.visaSupport === "no" ? "雇主明确不提供" : "未说明"}</dd></div>
+              </>
+            ) : item.kind === "policy" ? (
+              <>
+                <div><dt className="inline font-medium text-[var(--text)]">适用身份：</dt><dd className="inline">{item.identityLabel ?? item.whoApplies ?? "见原文"}</dd></div>
+                <div><dt className="inline font-medium text-[var(--text)]">状态：</dt><dd className="inline">{item.policyStatus === "enacted" ? "已生效" : item.policyStatus === "proposal" ? "提案/计划，尚未生效" : "未说明是提案还是已生效"}</dd></div>
+                <div><dt className="inline font-medium text-[var(--text)]">说明：</dt><dd className="inline">这是政府政策，不是招聘岗位，不能按「岗位可申请」理解。</dd></div>
+              </>
+            ) : null}
+          </dl>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             {item.blockedReason ? (
               <>
@@ -800,7 +877,7 @@ function OverseasRow({ item }: { item: OverseasItem }) {
                 </span>
               </>
             ) : item.readUrl ? (
-              <ViewOriginalButton url={item.readUrl} />
+              <ViewOriginalButton url={item.readUrl} label={item.official ? "官方原文" : "查看原文"} />
             ) : (
               <CopyTitleButton title={item.title} />
             )}
@@ -812,7 +889,9 @@ function OverseasRow({ item }: { item: OverseasItem }) {
   );
 }
 
-function OverseasSection() {
+function OverseasCategorySection({ category }: { category: "study" | "work_visa" }) {
+  const [country, setCountry] = useState<string>("全部国家");
+  const [stage, setStage] = useState<string>("全部阶段");
   const [showBachelorOnly, setShowBachelorOnly] = useState(false);
   const queryClient = useQueryClient();
   const q = useQuery({ queryKey: ["overseas"], queryFn: () => api.getOverseas({ force: false }) });
@@ -824,23 +903,30 @@ function OverseasSection() {
     },
     onError: () => {},
   });
-  const items = q.data?.items ?? [];
-  // Fixed visa zone: pinned visa items always show (their eligibility badge
-  // states any degree restriction); the bachelor-only toggle governs only
-  // the rotating list below it.
-  const visaItems = items.filter((it) => it.visa && it.pinned);
+  const isStudy = category === "study";
+  const stages = isStudy ? STUDY_STAGES : WORK_STAGES;
+  const items = (q.data?.items ?? []).filter((it) => it.category === category);
+  // Fixed visa zone lives inside the work/visa category; applicability was
+  // already checked server-side before pinning.
+  const visaItems = isStudy ? [] : items.filter((it) => it.visa && it.pinned);
   const rotating = items.filter((it) => !(it.visa && it.pinned));
-  const visible = rotating.filter((it) => showBachelorOnly || it.eligibility !== "bachelor_only");
+  const byBachelor = rotating.filter((it) => showBachelorOnly || it.eligibility !== "bachelor_only");
   const hiddenCount = rotating.length - rotating.filter((it) => it.eligibility !== "bachelor_only").length;
+  const filtered = byBachelor.filter(
+    (it) =>
+      (country === "全部国家" || it.country === country) &&
+      (stage === "全部阶段" || it.stage === stage || (stage === "policy" && it.kind === "policy")),
+  );
+  const title = isStudy ? "海外升学" : "海外实习、工作与签证";
   return (
-    <section aria-label="中国专科生海外机会与政策变化" className="mt-10 border-t-2 border-[var(--text)] pt-5">
+    <section id={isStudy ? "overseas-study" : "overseas-work"} aria-label={title} className="mt-10 border-t-2 border-[var(--text)] pt-5">
       <div className="flex items-center justify-between gap-3">
-        <h3 className="font-headline text-xl font-black text-[var(--text)]">中国专科生海外机会与政策变化</h3>
+        <h3 className="font-headline text-xl font-black text-[var(--text)]">{title}</h3>
         <div className="flex shrink-0 items-center gap-2">
           {q.data ? <span className="hidden text-xs text-[var(--dim)] sm:inline">更新于 {clockTime(q.data.asOf)}</span> : null}
           <button
             type="button"
-            aria-label="刷新海外机会"
+            aria-label={`刷新${title}`}
             onClick={() => refresh.mutate()}
             disabled={refresh.isPending}
             className="rounded-full border border-[var(--border)] px-3 text-sm text-[var(--text)] disabled:opacity-50"
@@ -850,19 +936,52 @@ function OverseasSection() {
         </div>
       </div>
       <p className="mt-1 text-xs text-[var(--dim)]">
-        跟踪美国、新西兰、新加坡、越南、日本、韩国、爱尔兰、英国 · 只放会改变你决策的消息：接受大专申请、学分认定、奖学金、学生签证、安全提醒
+        {isStudy
+          ? "覆盖提前出国、本科衔接或转学分，以及以后读硕士 · 费用保留原币并注明按年还是整个项目，预算未定所以不按价格过滤 · 点开看专业匹配、语言要求、截止日期、学费、生活费和奖学金"
+          : "岗位优先信息安全、网络运维和 IT 技术支持 · 岗位与政策分开标记：政策链接官方原文，注明适用身份、生效日期和提案还是已生效，政策本身不算「岗位可申请」 · 跟踪美国、新西兰、新加坡、越南、日本、韩国、爱尔兰、英国"}
       </p>
+      <div className="mt-3 flex flex-wrap gap-2" role="tablist" aria-label={`${title}按国家筛选`}>
+        {["全部国家", ...OVERSEAS_COUNTRIES].map((c) => (
+          <button
+            key={c}
+            type="button"
+            role="tab"
+            aria-selected={country === c}
+            onClick={() => setCountry(c)}
+            className={`rounded-full px-3 text-sm ${country === c ? "bg-[var(--text)] font-semibold text-[var(--bg)]" : "border border-[var(--border)] text-[var(--text)]"}`}
+          >
+            {c}
+          </button>
+        ))}
+      </div>
+      <div className="mt-2 flex flex-wrap gap-2" role="tablist" aria-label={`${title}按阶段筛选`}>
+        {["全部阶段", ...stages.map((x) => x.label), ...(isStudy ? [] : ["签证/移民政策"])].map((label) => {
+          const id = label === "全部阶段" ? "全部阶段" : label === "签证/移民政策" ? "policy" : (stages.find((x) => x.label === label)?.id ?? label);
+          return (
+            <button
+              key={label}
+              type="button"
+              role="tab"
+              aria-selected={stage === id}
+              onClick={() => setStage(id)}
+              className={`rounded-full px-3 text-sm ${stage === id ? "bg-[var(--accent)] font-semibold text-white" : "border border-[var(--border)] text-[var(--text)]"}`}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
       {q.isPending ? (
-        <p className="py-6 text-sm text-[var(--dim)]">正在追踪海外机会与政策…</p>
+        <p className="py-6 text-sm text-[var(--dim)]">正在追踪海外消息…</p>
       ) : items.length === 0 ? (
-        <p className="py-6 text-sm text-[var(--dim)]">暂时没取到新的海外机会与政策消息，点刷新再试。</p>
+        <p className="py-6 text-sm text-[var(--dim)]">暂时没取到这一栏的新消息，点刷新再试。</p>
       ) : (
         <>
-          {visaItems.length > 0 ? (
+          {visaItems.length > 0 && country === "全部国家" && stage === "全部阶段" ? (
             <div className="mt-4">
               <h4 className="font-headline text-base font-bold text-[var(--text)]">签证新政 · 固定区</h4>
               <p className="mt-0.5 text-xs text-[var(--dim)]">
-                会改变决策的学生签证与毕业后工签消息固定展示，不随每天刷新轮换；只有被更新的消息取代、或过期后才会撤下。
+                会改变决策的学生签证与毕业后工签消息固定展示，不随每天刷新轮换；只有被更新的消息取代、过期、或确认不适用于你时才会撤下。
               </p>
               <ul>
                 {visaItems.map((item) => (
@@ -871,18 +990,15 @@ function OverseasSection() {
               </ul>
             </div>
           ) : null}
-          {visible.length > 0 ? (
-            <div className={visaItems.length > 0 ? "mt-6" : undefined}>
-              {visaItems.length > 0 ? (
-                <h4 className="font-headline text-base font-bold text-[var(--text)]">其他机会与政策</h4>
-              ) : null}
-              <ul>
-                {visible.slice(0, 10).map((item) => (
-                  <OverseasRow key={item.url} item={item} />
-                ))}
-              </ul>
-            </div>
-          ) : null}
+          {filtered.length > 0 ? (
+            <ul>
+              {filtered.slice(0, 12).map((item) => (
+                <OverseasRow key={item.url} item={item} />
+              ))}
+            </ul>
+          ) : (
+            <p className="py-6 text-sm text-[var(--dim)]">这个筛选下暂时没有条目，换个国家或阶段看看。</p>
+          )}
         </>
       )}
       {hiddenCount > 0 ? (
@@ -894,6 +1010,102 @@ function OverseasSection() {
         >
           {showBachelorOnly ? "隐藏仅面向本科毕业生的项目" : `有 ${hiddenCount} 条仅面向本科毕业生的项目已默认隐藏，点这里查看`}
         </button>
+      ) : null}
+    </section>
+  );
+}
+
+function RecentApplicableSection() {
+  const q = useQuery({ queryKey: ["digest"], queryFn: () => api.getDailyDigest({ force: false }) });
+  const items: DigestItem[] = q.data?.items ?? [];
+  return (
+    <section aria-label="近期可申请" className="mt-10 border-t-2 border-[var(--text)] pt-5">
+      <h3 className="font-headline text-xl font-black text-[var(--text)]">近期可申请</h3>
+      <p className="mt-1 text-xs text-[var(--dim)]">最多 5 条 · 优先有明确申请对象、有效入口和截止日期的机会，官方来源优先 · 政策不算可申请，明确不适用于你的不进这里</p>
+      {q.isPending ? (
+        <p className="py-6 text-sm text-[var(--dim)]">正在汇总近期可申请的机会…</p>
+      ) : items.length === 0 ? (
+        <p className="py-6 text-sm font-medium text-[var(--text)]">暂无符合条件的新机会</p>
+      ) : (
+        <ul>
+          {items.map((item) => (
+            <li key={item.url} className="border-b border-[var(--border)] py-3">
+              <a href={item.url} target="_blank" rel="noreferrer" className="font-headline text-[17px] font-bold leading-snug text-[var(--text)] underline-offset-2 hover:underline">
+                {item.title}
+              </a>
+              <p className="mt-1 text-sm leading-relaxed text-[var(--dim)]">
+                <span className="font-medium text-[var(--text)]">和我有什么关系：</span>
+                {item.relevance}
+              </p>
+              <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-[var(--dim)]">
+                <span className="rounded-full border border-[var(--border)] px-2 py-0.5 font-medium text-[var(--text)]">{item.categoryLabel}</span>
+                {item.country ? <span className="rounded-full border border-[var(--border)] px-2 py-0.5 text-[var(--text)]">{item.country}</span> : null}
+                {item.official ? <span className="rounded-full bg-[var(--space-surface-alt)] px-2 py-0.5 text-[var(--text)]">官方来源</span> : null}
+                <span className="font-medium text-[var(--text)]">{item.source}</span>
+                {item.publishedAt ? <span>· 发布于 {formatDateOnly(item.publishedAt)}</span> : null}
+                <span>· 申请截止：{item.deadline ?? "未说明"}</span>
+                {item.effectiveWhen ? <span>· 生效：{item.effectiveWhen}</span> : null}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function HotSection() {
+  const [open, setOpen] = useState(false);
+  const [sourceId, setSourceId] = useState<string>("weibo");
+  const q = useQuery({ queryKey: ["hot"], queryFn: () => api.getHotLists({ force: false }), enabled: open });
+  const sources: HotSource[] = q.data?.sources ?? [];
+  const active = sources.find((x) => x.id === sourceId) ?? sources[0];
+  return (
+    <section aria-label="综合热榜" className="mt-10 border-t-2 border-[var(--text)] pt-5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between text-left"
+      >
+        <h3 className="font-headline text-xl font-black text-[var(--text)]">综合热榜</h3>
+        <span className="text-sm font-medium text-[var(--accent)]">{open ? "收起 ▴" : "展开 ▾"}</span>
+      </button>
+      {open ? (
+        q.isPending ? (
+          <p className="py-6 text-sm text-[var(--dim)]">正在取热榜…</p>
+        ) : sources.length === 0 ? (
+          <p className="py-6 text-sm text-[var(--dim)]">热榜暂时没取到，稍后再展开试试。</p>
+        ) : (
+          <>
+            <div className="mt-3 flex flex-wrap gap-2" role="tablist" aria-label="热榜平台">
+              {sources.map((src) => (
+                <button
+                  key={src.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active?.id === src.id}
+                  onClick={() => setSourceId(src.id)}
+                  className={`rounded-full px-3.5 text-sm ${active?.id === src.id ? "bg-[var(--text)] font-semibold text-[var(--bg)]" : "border border-[var(--border)] text-[var(--text)]"}`}
+                >
+                  {src.label}
+                </button>
+              ))}
+            </div>
+            {q.data ? <p className="mt-2 text-xs text-[var(--dim)]">更新于 {clockTime(q.data.asOf)} · 排名按各平台自己的顺序</p> : null}
+            <ol>
+              {(active?.items ?? []).map((it) => (
+                <li key={`${active?.id}-${it.rank}`} className="border-b border-[var(--border)] py-2.5">
+                  <a href={it.url} target="_blank" rel="noreferrer" className="flex items-baseline gap-3 text-left">
+                    <span className="w-6 shrink-0 text-right font-headline text-base font-black text-[var(--accent)]">{it.rank}</span>
+                    <span className="min-w-0 flex-1 text-[15px] font-medium leading-snug text-[var(--text)]">{it.title}</span>
+                    {it.heat ? <span className="shrink-0 text-xs text-[var(--dim)]">{it.heat}</span> : null}
+                  </a>
+                </li>
+              ))}
+            </ol>
+          </>
+        )
       ) : null}
     </section>
   );
@@ -917,9 +1129,9 @@ function WorldSection() {
     topic === "今日精选" ? (q.data?.daily ?? []) : all.filter((it) => it.topic === topic && !it.weekly).slice(0, 10);
   const weekly = q.data?.weekly ?? [];
   return (
-    <section aria-label="我关注的世界" className="mt-10 border-t-2 border-[var(--text)] pt-5">
+    <section aria-label="国内外要闻" className="mt-10 border-t-2 border-[var(--text)] pt-5">
       <div className="flex items-center justify-between gap-3">
-        <h3 className="font-headline text-xl font-black text-[var(--text)]">我关注的世界</h3>
+        <h3 className="font-headline text-xl font-black text-[var(--text)]">国内外要闻 · 观察与阅读</h3>
         <div className="flex shrink-0 items-center gap-2">
           {q.data ? <span className="hidden text-xs text-[var(--dim)] sm:inline">更新于 {clockTime(q.data.asOf)}</span> : null}
           <button
@@ -933,7 +1145,7 @@ function WorldSection() {
           </button>
         </div>
       </div>
-      <p className="mt-1 text-xs text-[var(--dim)]">每天最多精选 5 条，同一事件已合并 · 按主题浏览，不凑数量</p>
+      <p className="mt-1 text-xs text-[var(--dim)]">国内经济，以及国际经济、政治、科技、网络安全、地区冲突、留学与出行安全 · 按重要性筛选，每天最多精选 5 条，同一事件已合并 · 全球覆盖，不受海外机会八国名单限制</p>
       <div className="mt-3 flex flex-wrap gap-2" role="tablist" aria-label="世界主题">
         {topics.map((t) => (
           <button
@@ -957,7 +1169,7 @@ function WorldSection() {
       ) : (
         <ul>
           {list.map((item, i) => (
-            <ArticleRow key={`${item.url}-${i}`} item={item} />
+            <ArticleRow key={`${item.url}-${i}`} item={item} relevance={item.relevance} />
           ))}
         </ul>
       )}
@@ -966,7 +1178,7 @@ function WorldSection() {
           <h4 className="font-headline text-base font-bold text-[var(--text)]">每周精选 · 书籍 / 历史 / 语言学习</h4>
           <ul>
             {weekly.map((item, i) => (
-              <ArticleRow key={`${item.url}-${i}`} item={item} />
+              <ArticleRow key={`${item.url}-${i}`} item={item} relevance={item.relevance} />
             ))}
           </ul>
         </div>
@@ -979,9 +1191,12 @@ function HomeView({ onGoLearning }: { onGoLearning: () => void }) {
   return (
     <div>
       <JiangxiSection />
-      <OverseasSection />
+      <RecentApplicableSection />
+      <OverseasCategorySection category="study" />
+      <OverseasCategorySection category="work_visa" />
       <WorldSection />
       <LearningSection onGoLearning={onGoLearning} />
+      <HotSection />
     </div>
   );
 }
@@ -1309,6 +1524,8 @@ export function App() {
       queryClient.invalidateQueries({ queryKey: ["jiangxi"] });
       queryClient.invalidateQueries({ queryKey: ["overseas"] });
       queryClient.invalidateQueries({ queryKey: ["world"] });
+      queryClient.invalidateQueries({ queryKey: ["digest"] });
+      queryClient.invalidateQueries({ queryKey: ["hot"] });
     },
     onError: () => {
       // Keep showing the previous version; just refresh the status line so a

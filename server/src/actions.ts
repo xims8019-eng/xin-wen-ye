@@ -8,7 +8,7 @@ import { completeInference } from "./llm.js";
 // Local replacement for the SDK's `defineAction` (previously provided by
 // the Muse-hosted SDK). It returns the definition object as-is, keeping the
 // description/request/response/handler structure and type inference, so the
-// 16 action definitions below did not need to change.
+// 18 action definitions below did not need to change.
 // ---------------------------------------------------------------------------
 
 function defineAction<Req extends z.ZodTypeAny, Res extends z.ZodTypeAny>(def: {
@@ -721,6 +721,7 @@ async function loadFeedItems(
 type LearningCategory = "courses" | "resources" | "opportunities";
 
 interface LearningItem {
+  relevance?: string;
   title: string;
   url: string;
   source: string;
@@ -808,6 +809,91 @@ interface EnrichEntry {
   needsApplication: boolean;
 }
 
+/**
+ * Learning-column rule (user, 2026-11-22): category 4 （学习与实践） keeps
+ * ONLY what the user can still act on — skills competitions, free courses
+ * or labs, language learning and language-exam registration that he can
+ * still sign up for, watch a replay of, or start learning directly. This
+ * strict filter applies to the FULL learning list (the getLearning
+ * handler re-applies it to every response), not only to the homepage
+ * digest strips. Hidden: opportunities whose deadline has already
+ * passed; reports of events that are already over （研讨会/研讨活动
+ * without an open call, 收官， 获奖名单， 圆满结束…); items aimed at a
+ * school stage that is not his — 中小学/初中/高中 students, or 博士/硕士
+ * 研究生 admissions (he is a 专科 student); pure news reports and
+ * industry forums; and items that clearly do not apply to him — open
+ * only to one foreign country's students/residents （只限巴基斯坦、只限
+ * 马来西亚…), or an intake month that is already past. When nothing
+ * qualifies, the column is honestly empty rather than padded with news.
+ */
+function isLearningNotActionable(
+  item: {
+    title: string;
+    summaryZh?: string | null;
+    points?: string[];
+    audienceStage: string | null;
+    deadline: string | null;
+    needsApplication?: boolean;
+  },
+  todayStr: string,
+): boolean {
+  const { title, audienceStage, deadline } = item;
+  if (deadline && deadline < todayStr) return true;
+  const t = title;
+  const text = `${t} ${item.summaryZh ?? ""} ${(item.points ?? []).join(" ")}`;
+  // Already-finished events and write-ups of them.
+  if (/研讨会|研讨活动/.test(t) && !/报名|征集|将于|预告/.test(t)) return true;
+  if (/圆满(结束|落幕|举行)|落下帷幕|成功(举办|召开|举行)|完美收官|圆满收官|获奖名单|颁奖(典礼|仪式)/.test(t)) return true;
+  // Wrong school stage: primary / secondary school audiences.
+  if (/中小学|中小学生|小学生|初中生|高中生|九年一贯制/.test(t)) return true;
+  // Graduate admissions are not his stage either.
+  if (/(博士|硕士)研究生招生|招收(博士|硕士)研究生/.test(t)) return true;
+  if (audienceStage && /小学|初中|中小学|高中/.test(audienceStage)) return true;
+  if (audienceStage && /(博士|硕士)/.test(audienceStage) && !/不限|专科|高职|大学生|本科/.test(audienceStage)) return true;
+  // Internship postings live in category 3 （海外实习、工作与签证） — the
+  // learning column links across to them instead of listing them here.
+  if (/实习(生)?(招聘|岗位|招募|招收)|招聘实习生/.test(t)) return true;
+  // Clearly not applicable to him: the offer is for one foreign country's
+  // own students/residents only (the Pakistan HEC Coursera licences, the
+  // Malaysia-only scholarship) — a Chinese student in Jiangxi cannot take
+  // part, however free or well-meant it is.
+  if (
+    /(适合|面向|仅限|只限|专供|供)\s*(巴基斯坦|马来西亚|Pakistan|Malaysia)|(巴基斯坦|马来西亚)(高校|大学生|学生|居民)/i.test(
+      text,
+    )
+  )
+    return true;
+  if (/不适用于(我|中国)|仅限[^。]{0,10}(公民|居民|学生)(申请|参加)?/.test(text)) return true;
+  // Expired intake: the stated 入学/开学/开课 month is already past, even
+  // when no formal deadline field was extracted (the Malaysia scholarship
+  // was for a 2026 年 4 月 intake).
+  const intake = text.match(/(20\d{2})\s*年\s*(\d{1,2})\s*月[^。]{0,12}(入学|开学|开课|入读)/);
+  if (intake) {
+    const iy = Number(intake[1]);
+    const im = Number(intake[2]);
+    const ty = Number(todayStr.slice(0, 4));
+    const tm = Number(todayStr.slice(5, 7));
+    if (iy < ty || (iy === ty && im < tm)) return true;
+  }
+  // Industry forums / summits are not something a student joins to learn:
+  // no student-facing sign-up, contest or course in the title → out (the
+  // GET2026 ClassIn AI 教培生态论坛 is the shape this removes).
+  if (/(论坛|峰会)/.test(t) && !/(学生|竞赛|大赛|报名|课程|讲座|公开课)/.test(t)) return true;
+  // No actionable signal at all → a pure news report, an advice essay or
+  // a product/company story (the UN climate report, the AI-interviewer
+  // news, the MIT program write-ups, the Workday integration story).
+  // Actionable means: it needs an application/sign-up, or the title names
+  // a course / lecture / lab / contest / exam / scholarship / textbook /
+  // question bank / language study the user can start or join.
+  const actionable =
+    item.needsApplication === true ||
+    /(课程|公开课|实验|讲座|训练营|慕课|学习计划|系列课|竞赛|大赛|考试|报名|招生|申请|奖学金|教材|题库|英语|日语|韩语|语言学习)|\b(courses?|lectures?|bootcamp|learning plans?|scholarships?|competitions?|exams?)\b/i.test(
+      t,
+    );
+  if (!actionable) return true;
+  return false;
+}
+
 type LearningCandidate = FeedItem & {
   hint: LearningCategory;
   chineseUrl: string | null;
@@ -819,7 +905,7 @@ type LearningCandidate = FeedItem & {
 
 async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: LearningItem[]; asOf: string }> {
   if (!force) {
-    const cached = await readCache<LearningItem[]>(ctx, "learning:all", LEARNING_TTL_MS);
+    const cached = await readCache<LearningItem[]>(ctx, "learning:all:v2", LEARNING_TTL_MS);
     // Guard against payloads written by older builds: missing link fields, or
     // any item still carrying a relay link (Google News / Bing apiclick) as
     // its stored URL — those payloads must be rebuilt, never served.
@@ -956,7 +1042,7 @@ async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: Learning
 
   if (candidates.length === 0) {
     await noteRefreshFailure(ctx);
-    const stale = await readCacheStale<LearningItem[]>(ctx, "learning:all");
+    const stale = await readCacheStale<LearningItem[]>(ctx, "learning:all:v2");
     if (stale) return { items: stale.data, asOf: stale.asOf };
     return { items: [], asOf: new Date().toISOString() };
   }
@@ -1003,7 +1089,7 @@ async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: Learning
       .join("\n");
     return (
       `你在为学生整理一个「学习」资讯栏目。下面是抓到的候选条目（带编号）。请逐条判断并整理：\n` +
-      `- keep：是否真的对学生学习有用（课程/讲座、学习资源、或可报名的竞赛/暑期学校/奖学金等机会）。教材出版、学习工具、教育资源类资讯，只要对学生或教师的学习有实际参考价值，也 keep=true。纯娱乐、明星八卦、招生广告软文、培训机构广告、与学习无关的新闻，keep=false。\n` +
+      `- keep：是否真的对学生学习有用（课程/讲座、学习资源、或可报名的竞赛/暑期学校/奖学金等机会）。教材出版、学习工具、教育资源类资讯，只要对学生或教师的学习有实际参考价值，也 keep=true。纯娱乐、明星八卦、招生广告软文、培训机构广告、与学习无关的新闻，keep=false。已经结束的活动报道（如已召开的研讨会、论坛回顾、获奖名单），以及只面向中小学生或博士/硕士研究生的内容，对一位专科在读生没有可行动价值，keep=false。纯新闻报道（时事评论、行业动态、企业产品或合作消息、大学项目介绍）即使与教育有关也不是能参加的学习内容，keep=false；面向行业从业者的论坛、峰会，keep=false；只面向某个外国国家本国学生/居民的机会（如仅限巴基斯坦、马来西亚学生），以及入学时间已经过去的招生，keep=false。本栏只留他现在还能报名、能看回放或能直接开始学的内容，宁缺毋滥。\n` +
       `- category：courses（课程与讲座）/ resources（学习资源）/ opportunities（学生机会），以内容为准，可修正类别提示。\n` +
       `- summaryZh：用一句中文说清「适合谁、能学到什么」。只能依据摘要里已有的信息写（摘要是英文的就翻译提炼），不要编造课程内容、机构承诺或数字。条目标注「无摘要，仅有标题」时，summaryZh 必须留空字符串——绝不根据标题猜测正文。\n` +
       `- pointsZh：2-3 条中文要点，逐条只能来自摘要原文的信息（英文摘要翻译成中文）；无摘要的条目留空数组。\n` +
@@ -1090,11 +1176,28 @@ async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: Learning
   }
 
   // 6) Build the final items. Every item's url AND readUrl are the direct
-  //    publisher address resolved in step 2 — never a relay link.
+  //    publisher address resolved in step 2 — never a relay link. Items the
+  //    user can no longer act on (deadline passed, event already over,
+  //    wrong school stage) are dropped here per the 2026-11-22 rule.
+  const todayStrL = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
   const items: LearningItem[] = [];
   for (const it of candidates) {
     if (droppedUrls.has(it.url)) continue;
     const entry = enrichStore[it.url];
+    if (
+      isLearningNotActionable(
+        {
+          title: it.title,
+          summaryZh: entry?.summaryZh ?? (it.summary && it.summary.trim() ? it.summary : null),
+          points: entry?.points ?? [],
+          audienceStage: entry?.audienceStage ?? null,
+          deadline: entry?.deadline ?? null,
+          needsApplication: entry?.needsApplication ?? it.hint === "opportunities",
+        },
+        todayStrL,
+      )
+    )
+      continue;
     const hasSummary = !!(it.summary && it.summary.trim().length > 0);
     const fallbackSummaryZh = hasSummary ? (it.summary as string).slice(0, 90) : null;
     const host = hostOf(it.url);
@@ -1137,7 +1240,7 @@ async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: Learning
   //    version instead of overwriting it with a degraded one.
   const anyEnriched = items.some((it) => it.summaryZh !== null);
   if (!anyEnriched && items.length > 0) {
-    const stale = await readCacheStale<LearningItem[]>(ctx, "learning:all");
+    const stale = await readCacheStale<LearningItem[]>(ctx, "learning:all:v2");
     if (stale && stale.data.some((it) => it.summaryZh !== null)) {
       return { items: stale.data, asOf: stale.asOf };
     }
@@ -1156,7 +1259,7 @@ async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: Learning
   }
   await writeCache(ctx, "learning:enrich:v2", boundedStore);
   void newEnriched;
-  const asOf = await writeCache(ctx, "learning:all", items);
+  const asOf = await writeCache(ctx, "learning:all:v2", items);
   return { items, asOf };
 }
 
@@ -1175,50 +1278,6 @@ async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: Learning
  */
 const WFYI_SCHOLARSHIP_URL =
   "https://www.wfyi.org/education/2026-11-20/new-indiana-college-scholarship-offers-students-up-to-5-000-to-finish-degrees";
-
-/**
- * Homepage filter for the 学习 column (2026-11-22, user rule): show only
- * what the user can still join, watch a replay of, or start learning
- * directly. Ended one-off events （研讨会 / 大赛收官 / 获奖报道…), items
- * aimed at other school stages （中小学 / 初中 / 博士 / 硕士研究生）, and
- * pure education news with nothing to join or learn are hidden from the
- * homepage. If nothing qualifies, the column is left empty rather than
- * padded. Deterministic (title/summary/fields only) so it also works on the
- * self-hosted build, where no model key is configured and enrichment is
- * unavailable. Applied on read (getLearning), so cached items are filtered
- * immediately.
- */
-export function isLearningHomepageItem(it: LearningItem): boolean {
-  const todayStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
-  const text = `${it.title} ${it.summaryZh ?? ""} ${(it.points ?? []).join(" ")}`;
-  // Wrong school stage for a second-year 专科 student. Title only (plus the
-  // enrichment field when present): roundup summaries can mention another
-  // stage in passing while the item itself is still relevant.
-  if (/中小学|初中|小学|幼儿园|博士|硕士|研究生/.test(it.title)) return false;
-  if (
-    it.audienceStage &&
-    /小学|初中|高中|硕士|博士|研究生/.test(it.audienceStage) &&
-    !/本科|专科|不限|大学/.test(it.audienceStage)
-  )
-    return false;
-  // Ended one-off events with nothing left to join or replay.
-  if (
-    /(研讨会|座谈会|论坛|峰会|交流会|大赛|竞赛|挑战赛)/.test(it.title) &&
-    /(举办|举行|召开|落幕|闭幕|收官|圆满结束|成功举办)/.test(it.title)
-  )
-    return false;
-  if (/(赛报|获奖|一等奖|二等奖|三等奖|收官|落幕|闭幕)/.test(it.title) && !/回放|回看/.test(text)) return false;
-  // Still open: a future deadline always qualifies.
-  if (it.deadline && it.deadline >= todayStr) return true;
-  // Directly joinable / learnable, by title or summary.
-  if (
-    /报名|申请|奖学金|助学金|夏校|冬令营|课程|公开课|讲座|网课|免费|在线学习|教材|题库|回放|回看|试听|训练营|工作坊|竞赛|大赛|挑战赛|招生|专升本|四六级|scholarship|apply now|free course|online course|online learning|learning plans|tutorial|how to learn|learn to/i.test(
-      text,
-    )
-  )
-    return true;
-  return false;
-}
 
 function correctLearningItem(it: LearningItem): LearningItem {
   const blockedReason = it.blockedReason ?? cnBlockedReason(it.readUrl ?? it.url);
@@ -1321,8 +1380,13 @@ interface JiangxiItem {
   official: boolean;
   /** True when the item is a media repost rather than an official page — never presented as 官方来源. */
   repost: boolean;
+  /** 2028 届正式通知 (2028 + official source) / 往年备考参考 / 尚待确认的动态. */
+  noticeKind: JiangxiNoticeKind;
+  /** Whether 信息安全技术应用 can apply — set ONLY when a formal 专业对照 basis in the source names the major; otherwise null (never guessed). */
+  canApplyMajor: boolean | null;
 }
 
+type JiangxiNoticeKind = "formal2028" | "reference" | "unconfirmed";
 const JIANGXI_TTL_MS = 60 * 60 * 1000;
 const JIANGXI_QUERIES = [
   "江西专升本 招生 考试院",
@@ -1378,25 +1442,34 @@ function jiangxiFallback(it: FeedItem): JiangxiEnrichEntry {
 }
 
 /**
- * Homepage exclusion for the 江西专升本 column (2026-11-22, user rule):
- * the user is already a second-year 专科 student, so training-institution
- * marketing （机构测评 / 选机构软文） and 高考择校 content (teaching 高考
- * students how to pick a 大专） are hidden from the homepage. Applied both
- * at ingest and on read, so cached items disappear immediately. The two
- * items the user named both live under gaokao.eol.cn — the 高考 section —
- * which is the most reliable signal; title patterns cover training
- * marketing wherever it appears.
+ * Homepage noise the user asked to hide (2026-11-22): he is a second-year
+ * 专科 student, so two classes of search results never belong in this
+ * column — (1) training-institution marketing （机构评测/测评、十大机构、
+ * 哪家好、选机构类） and (2) 高考择校 content written for gaokao students
+ * choosing a 专科/大专 school (including anything from the gaokao.eol.cn
+ * channel). Deterministic, host/title based, applied at ingest so no
+ * refresh or enrichment-fallback path can bring them back.
  */
-export function isJiangxiHomepageExcluded(it: { title: string; url: string }): boolean {
-  if (/gaokao\.eol\.cn/i.test(it.url)) return true;
-  if (/机构怎么选|机构.*评测|评测.*机构|培训机构|本地化教研|辅导班|培训班/.test(it.title)) return true;
-  if (/择校/.test(it.title) && /大专/.test(it.title) && !/专升本考试|专升本报名/.test(it.title)) return true;
+function isJiangxiHiddenNoise(it: FeedItem): boolean {
+  const host = hostOf(it.url);
+  if (host === "gaokao.eol.cn" || host.startsWith("gaokao.")) return true;
+  const t = it.title;
+  // Training-institution marketing / roundups.
+  if (
+    /培训机构|机构评测|机构测评|机构.{0,6}(怎么选|如何选|哪家好)|哪家(机构|培训|学校).{0,4}(好|靠谱|强)|十大(培训|机构|品牌)|(培训|机构).{0,4}(排行榜|排名榜|推荐榜)/.test(t)
+  )
+    return true;
+  // 高考择校： written for gaokao candidates picking a college, not for a
+  // student already in his second year of 专科.
+  if (/高考|高三|高中生/.test(t) && /大专|专科|高职/.test(t) && /怎么选|如何选|怎样选|择校|选校|值得(读|上|报)|推荐|志愿/.test(t))
+    return true;
+  if (/择校/.test(t) && /大专|专科|高职|高考/.test(t)) return true;
   return false;
 }
 
 async function loadJiangxi(ctx: Ctx, force: boolean): Promise<{ items: JiangxiItem[]; asOf: string }> {
   if (!force) {
-    const cached = await readCache<JiangxiItem[]>(ctx, "jiangxi:all:v2", JIANGXI_TTL_MS);
+    const cached = await readCache<JiangxiItem[]>(ctx, "jiangxi:all:v4", JIANGXI_TTL_MS);
     if (cached) return { items: cached.data, asOf: cached.asOf };
   }
   const raw: FeedItem[] = [];
@@ -1419,8 +1492,13 @@ async function loadJiangxi(ctx: Ctx, force: boolean): Promise<{ items: JiangxiIt
       // Only 江西普通高校专升本 — drop 成人高考/自考/专套本 noise by title.
       if (!/专升本/.test(it.title)) return false;
       if (/成人高考|自学考试|自考/.test(it.title) && !/普通高校专升本|普通专升本/.test(it.title)) return false;
-      // 2026-11-22: 培训机构营销与高考择校内容不进首页（见 isJiangxiHomepageExcluded）。
-      if (isJiangxiHomepageExcluded(it)) return false;
+      // User rule (2026-11-22): training-institution marketing and 高考择校
+      // content are hidden from the homepage — he is already a second-year
+      // 专科 student, neither class can change a decision of his.
+      if (isJiangxiHiddenNoise(it)) return false;
+      // Ended exam-administration reminders (a 准考证打印/考场提醒 whose exam
+      // window has passed) are hidden by default — they cannot change a decision now.
+      if (/(已结束|已经结束|报名已截止|考试已结束)/.test(it.title)) return false;
       return true;
     })
     .sort((a, b) => {
@@ -1434,7 +1512,7 @@ async function loadJiangxi(ctx: Ctx, force: boolean): Promise<{ items: JiangxiIt
 
   if (deduped.length === 0) {
     await noteRefreshFailure(ctx);
-    const stale = await readCacheStale<JiangxiItem[]>(ctx, "jiangxi:all:v2");
+    const stale = await readCacheStale<JiangxiItem[]>(ctx, "jiangxi:all:v4");
     if (stale) return { items: stale.data, asOf: stale.asOf };
     return { items: [], asOf: new Date().toISOString() };
   }
@@ -1451,7 +1529,7 @@ async function loadJiangxi(ctx: Ctx, force: boolean): Promise<{ items: JiangxiIt
     try {
       const result = await completeInference(ctx, 
         `你在为一位江西大二专科生（专业：信息安全技术应用，预计 2028 年毕业、2028 年参加普通高校专升本）整理「江西专升本」栏目。逐条判断：\n` +
-          `- keep：是否确为江西省普通高校专升本的通知/政策/招生信息。成人高考、自考、培训机构广告、机构测评软文 keep=false。\n` +
+          `- keep：是否确为江西省普通高校专升本的通知/政策/招生信息。成人高考、自考、培训机构广告、机构测评软文、面向高考生选大专的择校指南 keep=false。\n` +
           `- tag：报名 / 考试科目 / 专业对照 / 招生简章 / 其他，按内容选最贴切的一个。\n` +
           `- summaryZh：一句中文概括这条讲了什么，只能依据摘要已有信息；无摘要时留空字符串，绝不根据标题猜正文。\n` +
           `- pointsZh：2-3 条中文要点，全部来自摘要原文；无摘要留空数组。\n` +
@@ -1514,6 +1592,21 @@ async function loadJiangxi(ctx: Ctx, force: boolean): Promise<{ items: JiangxiIt
       isReference: yearNum !== null ? yearNum < 2028 : true,
       official: isJiangxiOfficialUrl(it.url),
       repost: !isJiangxiOfficialUrl(it.url),
+      noticeKind: (yearNum === 2028 && isJiangxiOfficialUrl(it.url)
+        ? "formal2028"
+        : yearNum === 2028
+          ? "unconfirmed"
+          : "reference") as JiangxiNoticeKind,
+      canApplyMajor: ((): boolean | null => {
+        // Only a 专业对照 item whose own text names the user's major counts
+        // as a formal basis; anything else stays null (未确认), never guessed.
+        if (entry.tag !== "专业对照") return null;
+        const hay = `${it.title} ${it.summary ?? ""} ${entry.points.join(" ")}`;
+        if (!/信息安全技术应用/.test(hay)) return null;
+        if (/信息安全技术应用[^。；]{0,40}(不能报考|不可报考|不在对照|未列入|不对应)/.test(hay)) return false;
+        if (/信息安全技术应用[^。；]{0,60}(可报考|可以报考|对应|可报)/.test(hay)) return true;
+        return null;
+      })(),
     });
   }
   items.sort((a, b) => {
@@ -1529,7 +1622,7 @@ async function loadJiangxi(ctx: Ctx, force: boolean): Promise<{ items: JiangxiIt
     bounded[url] = e;
   }
   await writeCache(ctx, "jiangxi:enrich:v1", bounded);
-  const asOf = await writeCache(ctx, "jiangxi:all:v2", items);
+  const asOf = await writeCache(ctx, "jiangxi:all:v4", items);
   return { items, asOf };
 }
 
@@ -1564,8 +1657,29 @@ interface OverseasItem {
   visa: boolean;
   /** True when the item lives in the fixed visa zone: it does not rotate out on daily refreshes and is only removed when superseded by a newer item on the same topic or expired. */
   pinned: boolean;
+  /** Main category — exactly one: 海外升学 (study) or 海外实习、工作与签证 (work_visa). */
+  category?: OverseasCategory;
+  /** Stage within the category (see OverseasStage). */
+  stage?: OverseasStage;
+  kind?: "news" | "job" | "policy";
+  majorMatch?: string | null;
+  languageReq?: string | null;
+  /** Application deadline as stated by the source (free text, e.g. "2027年3月1日"); null = 未说明. */
+  deadline?: string | null;
+  tuition?: string | null;
+  livingCost?: string | null;
+  scholarship?: string | null;
+  location?: string | null;
+  remoteFromChina?: boolean | null;
+  eduReq?: string | null;
+  expReq?: string | null;
+  acceptsOverseas?: boolean | null;
+  visaSupport?: "yes" | "no" | "unstated";
+  policyStatus?: "enacted" | "proposal" | "unstated" | null;
 }
 
+type OverseasCategory = "study" | "work_visa";
+type OverseasStage = "prepare" | "diploma" | "bachelor" | "intern" | "direct" | "overseas_job" | "general";
 const OVERSEAS_TTL_MS = 60 * 60 * 1000;
 
 /**
@@ -1848,114 +1962,82 @@ const CURATED_VISA_ITEMS: OverseasItem[] = [
  */
 const PINNED_VISA_BLOCKED_HOSTS = ["dayonekorea.com", "gistreel.com"];
 
-const PINNED_VISA_KEY = "overseas:visa:pinned:v4";
+const PINNED_VISA_KEY = "overseas:visa:pinned:v6";
 /** Non-curated pinned visa items expire this long after their publish date. */
 const PINNED_VISA_MAX_AGE_MS = 365 * 24 * 3600 * 1000;
 
 /**
- * Homepage rules for the overseas column (2026-11-22, user rules):
- * 1) Applicability before pinning: an item that clearly does not apply to
- *    this user — eligibility bachelor_only, or text that explicitly says so
- *    （不适用于我 / 不含信息安全技术应用 / 只限有学士学位者） — leaves the
- *    homepage entirely (pinned zone and rotating list alike). This removes
- *    the NZ post-study expansion, the UK Graduate-visa shortening and the
- *    Korean technical pilot from the homepage; they stay in the code as
- *    curated items and can be restored on request.
- * 2) One event, one entry: exact duplicates (same normalized title, source
- *    and day) collapse, and items sharing an event signature (same country +
- *    nationality + overlapping topic tokens + same distinctive number,
- *    published within 7 days) keep a single entry — the official one, else
- *    the newest. This collapses the duplicated Times of India piece on the
- *    64.1% Indian NZ student-visa approval rate (same title/source/date
- *    twice) together with the other outlets' retellings of that same data
- *    release.
- * Applied at ingest, at assembly, and on read, so cached payloads are
- * cleaned immediately and no refresh can bring a removed item back.
+ * Applicability comes BEFORE pinning (user rule, 2026-11-22): an item that
+ * clearly does not apply to the user — eligibility bachelor_only, or its
+ * own text says so （不适用于我 / 不含信息安全技术应用） — leaves the
+ * homepage entirely. It is never pinned, however decision-changing it is
+ * for other people. This is what takes the NZ post-study expansion
+ * (bachelor_only), the UK Graduate-visa shortening (bachelor_only) and the
+ * Korea technical pilot (its own whoApplies ends with 「所以这条不适用于我」)
+ * out of the fixed zone, while the Yale D/S ruling （含专科背景申请人）,
+ * the Singapore MOM thresholds (eligibility unstated) and the Japan
+ * language-school rule (a route a 专科 student can still take) stay.
  */
-export function isClearlyNotApplicableToUser(it: OverseasItem): boolean {
+function isNotApplicableToUser(it: OverseasItem): boolean {
   if (it.eligibility === "bachelor_only") return true;
-  const text = `${it.whoApplies ?? ""} ${(it.points ?? []).join(" ")}`;
-  return /不适用于我|不含信息安全技术应用|专科毕业生不在|只限有学士学位者|只限学位毕业生/.test(text);
+  const text = `${it.whoApplies ?? ""} ${it.whatChanged ?? ""} ${it.points.join(" ")}`;
+  return /不适用于我|不适用于中国|不含信息安全|不适用于[^。]{0,12}专科/.test(text);
 }
 
-export function overseasExactDupKey(it: { title: string; source: string; publishedAt: string | null }): string {
-  const day = it.publishedAt ? it.publishedAt.slice(0, 10) : "";
-  return `${it.title.replace(/[\s\p{P}]/gu, "").slice(0, 40)}|${it.source}|${day}`;
+/** Whole-title normalized key for exact-duplicate detection (titleKey() truncates to 14 chars for topic supersede; duplicates need the full title). */
+function fullTitleKey(title: string): string {
+  return title.toLowerCase().replace(/[\s\p{P}]/gu, "");
 }
 
-export function overseasEventSignature(it: OverseasItem): {
-  country: string;
-  nat: string;
-  topics: Set<string>;
-  num: string;
-} | null {
-  const hay = `${it.title} ${it.whatChanged ?? ""}`;
-  const nat = /indian|india|印度/i.test(hay) ? "india" : /china|chinese|中国/i.test(hay) ? "china" : "";
-  const topics = new Set<string>();
-  if (/approv|通过率|获批|approval/i.test(hay)) topics.add("approval");
-  if (/work visa|工作签证/i.test(hay)) topics.add("workvisa");
-  if (/post-study|post study|毕业后工签|毕业后工作签证/i.test(hay)) topics.add("pswv");
-  if (/graduate visa|毕业生签证/i.test(hay)) topics.add("gradvisa");
-  if (/scholarship|奖学金/i.test(hay)) topics.add("scholarship");
-  if (/tuition|学费/i.test(hay)) topics.add("tuition");
-  if (/refus|拒签/i.test(hay)) topics.add("refusal");
-  if (/student visa|学生签证/i.test(hay)) topics.add("studentvisa");
-  const num = hay.match(/(\d+(?:\.\d+)?)\s*%/)?.[1] ?? "";
-  if (topics.size === 0 && !num) return null;
-  return { country: it.country, nat, topics, num };
+/**
+ * Text-level matcher for the India–New Zealand FTA event (in force
+ * 2026-10): the agreement's new work visas and longer post-study rights
+ * for Indians. Financial Express ("New Zealand launches 2 new work visas
+ * for Indians") and Indiatimes ("India-New Zealand FTA brings in new work
+ * visas and longer post-study rights for Indians") are the same event —
+ * the generic same-event test misses them because neither title carries
+ * a 2+-digit number ("2 new work visas" is a single digit). One event,
+ * one entry, official/newest first (user rule, 2026-11-22).
+ */
+function isIndiaNzFtaEventText(text: string): boolean {
+  return (
+    /(india|indian|印度)/i.test(text) &&
+    /(new zealand|新西兰)/i.test(text) &&
+    // The FTA itself or its NEW work-visa categories — a bare "post-study
+    // work visa" mention is a different NZ story and must not match.
+    /(\bFTA\b|free trade|自贸|自由贸易|new work visas|新增.{0,6}工作签证|新设.{0,6}工作签证)/i.test(text)
+  );
 }
 
-export function applyOverseasHomepageRules(items: OverseasItem[]): OverseasItem[] {
-  // 1) Exact duplicates: same title + source + day.
-  const seenExact = new Set<string>();
-  const deduped = items.filter((it) => {
-    const k = overseasExactDupKey(it);
-    if (seenExact.has(k)) return false;
-    seenExact.add(k);
+/**
+ * Same-event test for the rotating list: identical normalized titles are
+ * the same event at any date; otherwise the two titles must be about the
+ * same country, share a distinctive number (a fee, a salary threshold, a
+ * year…) and most of their characters, and be published within 7 days of
+ * each other — the shape of one story retold by several outlets.
+ */
+function sameOverseasEvent(a: OverseasItem, b: OverseasItem): boolean {
+  // Named cross-outlet events whose titles share no distinctive number.
+  if (
+    isIndiaNzFtaEventText(`${a.title} ${a.whatChanged ?? ""}`) &&
+    isIndiaNzFtaEventText(`${b.title} ${b.whatChanged ?? ""}`)
+  )
     return true;
-  });
-  // 2) Same event: same country + nationality + overlapping topics + same
-  //    distinctive number (or none), published within 7 days. Keep the
-  //    official entry, else the newest.
-  const sigs = deduped.map((it) => overseasEventSignature(it));
-  const kept: boolean[] = deduped.map(() => true);
-  const timeOf = (it: OverseasItem) => (it.publishedAt ? new Date(it.publishedAt).getTime() : 0);
-  for (let i = 0; i < deduped.length; i++) {
-    if (!kept[i] || !sigs[i]) continue;
-    for (let j = i + 1; j < deduped.length; j++) {
-      if (!kept[j] || !sigs[j]) continue;
-      const a = sigs[i]!;
-      const b = sigs[j]!;
-      if (a.country !== b.country || a.nat !== b.nat) continue;
-      if (a.num && b.num && a.num !== b.num) continue;
-      const inter = [...a.topics].filter((t) => b.topics.has(t));
-      if (inter.length === 0) continue;
-      // "studentvisa" alone is too generic to prove one event (many distinct
-      // stories share it) — a merge also needs a distinctive shared topic
-      // (approval / workvisa / …) or the same distinctive number.
-      const distinctive = inter.some((t) => t !== "studentvisa") || (a.num !== "" && a.num === b.num);
-      if (!distinctive) continue;
-      const subset =
-        [...a.topics].every((t) => b.topics.has(t)) || [...b.topics].every((t) => a.topics.has(t));
-      if (!subset) continue;
-      const ti = timeOf(deduped[i]!);
-      const tj = timeOf(deduped[j]!);
-      if (ti && tj && Math.abs(ti - tj) > 7 * 24 * 3600 * 1000) continue;
-      // Same event: keep official, else newest.
-      const dropJ =
-        deduped[j]!.official && !deduped[i]!.official
-          ? false
-          : deduped[i]!.official && !deduped[j]!.official
-            ? true
-            : tj <= ti;
-      if (dropJ) kept[j] = false;
-      else kept[i] = false;
-      if (!kept[i]) break;
-    }
-  }
-  const merged = deduped.filter((_, i) => kept[i]);
-  // 3) Applicability before pinning: clearly-not-applicable items leave.
-  return merged.filter((it) => !isClearlyNotApplicableToUser(it));
+  if (a.country !== b.country) return false;
+  const ka = fullTitleKey(a.title);
+  const kb = fullTitleKey(b.title);
+  if (ka === kb) return true;
+  const numsA = new Set(a.title.match(/\d{2,}/g) ?? []);
+  if (![...numsA].some((n) => b.title.includes(n))) return false;
+  const ta = a.publishedAt ? new Date(a.publishedAt).getTime() : null;
+  const tb = b.publishedAt ? new Date(b.publishedAt).getTime() : null;
+  if (ta === null || tb === null || Math.abs(ta - tb) > 7 * 24 * 3600 * 1000) return false;
+  const setA = new Set(ka);
+  const setB = new Set(kb);
+  let inter = 0;
+  for (const ch of setA) if (setB.has(ch)) inter++;
+  const union = setA.size + setB.size - inter;
+  return union > 0 && inter / union >= 0.6;
 }
 
 /**
@@ -1975,11 +2057,12 @@ async function mergePinnedVisaItems(ctx: Ctx, discovered: OverseasItem[]): Promi
   const curatedUrls = new Set(CURATED_VISA_ITEMS.map((it) => it.url));
   const now = Date.now();
   const fresh = [...byUrl.values()].filter((it) => {
+    // Applicability before pinning (user rule, 2026-11-22): an item that
+    // clearly does not apply to the user never enters — or stays in — the
+    // fixed zone, curated items included.
+    if (isNotApplicableToUser(it)) return false;
     // Blocked hosts (third-party explainers, no official original) never pin.
     if (PINNED_VISA_BLOCKED_HOSTS.some((h) => it.url.includes(h) || (it.readUrl ?? "").includes(h))) return false;
-    // 2026-11-22: applicability comes before pinning — a visa item that
-    // clearly does not apply to this user never stays pinned, curated or not.
-    if (isClearlyNotApplicableToUser(it)) return false;
     if (curatedUrls.has(it.url)) return true;
     // Retellings of events a curated item already covers never stay pinned.
     const text = `${it.title} ${it.whatChanged ?? ""}`;
@@ -1995,9 +2078,13 @@ async function mergePinnedVisaItems(ctx: Ctx, discovered: OverseasItem[]): Promi
     return now - new Date(it.publishedAt).getTime() < PINNED_VISA_MAX_AGE_MS;
   });
   // Supersede: same country + same normalized topic key → keep the newest.
+  // The India–NZ FTA event collapses to one shared key whatever country
+  // label or title wording each outlet's version carries.
   const byTopic = new Map<string, OverseasItem>();
   for (const it of fresh) {
-    const key = `${it.country}|${titleKey(it.title)}`;
+    const key = isIndiaNzFtaEventText(`${it.title} ${it.whatChanged ?? ""}`)
+      ? "event|india-nz-fta"
+      : `${it.country}|${titleKey(it.title)}`;
     const prev = byTopic.get(key);
     if (!prev) {
       byTopic.set(key, it);
@@ -2041,6 +2128,19 @@ function isDsRulingEventText(hay: string): boolean {
   // mention): limiting how long student-visa holders may stay IS the D/S
   // rule the Yale item covers end-to-end.
   if (/(学生签证|留学生|F-1)/.test(hay) && /(居留|停留).{0,3}(时长|期限)/.test(hay) && /(限制|新规|特朗普|国土安全部|DHS)/.test(hay)) return true;
+  // Fixed-term phrasing of the same rule (user rule, 2026-11-22): capping
+  // student stays at a fixed number of years — "US puts 4-year cap on
+  // student visas" (TimesNow, carried by MSN, 2026-07-17) — or a Chinese
+  // 固定期限 / 固定停留期 wording IS the D/S replacement rule. The Yale
+  // item covers the event end-to-end (proposal → injunction → vacatur),
+  // so these retellings merge into it and never pin or rotate separately.
+  if (
+    /(student visa|international student|foreign student|学生签证|留学生|国际学生)/i.test(hay) &&
+    (/((4|four)[- ]year|四年).{0,24}(cap|limit|上限|最长|固定)/i.test(hay) ||
+      /(cap|limit).{0,24}((4|four)[- ]year|四年)/i.test(hay) ||
+      /固定期限|固定停留期/.test(hay))
+  )
+    return true;
   return false;
 }
 
@@ -2186,6 +2286,14 @@ const OVERSEAS_QUERIES = [
  * enrichment pass classifies as visa changes are pinned into the fixed
  * zone by mergePinnedVisaItems instead of rotating out on the next refresh.
  */
+/** Category-3 sweep: internships and IT jobs (infosec / network ops / IT support first) across the eight tracked countries. */
+const OVERSEAS_JOB_QUERIES = [
+  "信息安全 网络运维 IT技术支持 实习 招聘 海外",
+  "cybersecurity internship international students apply",
+  "IT support network engineer jobs visa sponsorship international applicants",
+  "日本 韩国 新加坡 IT 工程师 招聘 外国人",
+];
+
 const OVERSEAS_VISA_QUERIES = [
   "美国 F-1 学生签证 政策 变化 OPT",
   "New Zealand student visa post-study work visa changes",
@@ -2211,6 +2319,22 @@ const overseasEnrichSchema = z.object({
       identityLabel: z.string().nullable().catch(null),
       pointsZh: z.array(z.string()).catch([]),
       visa: z.boolean().catch(false),
+      category: z.enum(["study", "work_visa"]).catch("study"),
+      stage: z.enum(["prepare", "diploma", "bachelor", "intern", "direct", "overseas_job", "general"]).catch("general"),
+      kind: z.enum(["news", "job", "policy"]).catch("news"),
+      majorMatch: z.string().nullable().catch(null),
+      languageReq: z.string().nullable().catch(null),
+      deadline: z.string().nullable().catch(null),
+      tuition: z.string().nullable().catch(null),
+      livingCost: z.string().nullable().catch(null),
+      scholarship: z.string().nullable().catch(null),
+      location: z.string().nullable().catch(null),
+      remoteFromChina: z.boolean().nullable().catch(null),
+      eduReq: z.string().nullable().catch(null),
+      expReq: z.string().nullable().catch(null),
+      acceptsOverseas: z.boolean().nullable().catch(null),
+      visaSupport: z.enum(["yes", "no", "unstated"]).catch("unstated"),
+      policyStatus: z.enum(["enacted", "proposal", "unstated"]).nullable().catch(null),
     }),
   ),
 });
@@ -2227,16 +2351,32 @@ interface OverseasEnrichEntry {
   keep: boolean;
   /** Student-visa / post-study-work-visa change → goes to the fixed visa zone. */
   visa: boolean;
+  category: OverseasCategory;
+  stage: OverseasStage;
+  kind: "news" | "job" | "policy";
+  majorMatch: string | null;
+  languageReq: string | null;
+  deadline: string | null;
+  tuition: string | null;
+  livingCost: string | null;
+  scholarship: string | null;
+  location: string | null;
+  remoteFromChina: boolean | null;
+  eduReq: string | null;
+  expReq: string | null;
+  acceptsOverseas: boolean | null;
+  visaSupport: "yes" | "no" | "unstated";
+  policyStatus: "enacted" | "proposal" | "unstated" | null;
 }
 
 async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: OverseasItem[]; asOf: string }> {
   if (!force) {
-    const cached = await readCache<OverseasItem[]>(ctx, "overseas:all:v10", OVERSEAS_TTL_MS);
+    const cached = await readCache<OverseasItem[]>(ctx, "overseas:all:v13", OVERSEAS_TTL_MS);
     if (cached) return { items: cached.data, asOf: cached.asOf };
   }
   const raw: FeedItem[] = [];
   await Promise.all(
-    [...OVERSEAS_QUERIES, ...OVERSEAS_VISA_QUERIES].map(async (q) => {
+    [...OVERSEAS_QUERIES, ...OVERSEAS_VISA_QUERIES, ...OVERSEAS_JOB_QUERIES].map(async (q) => {
       try {
         raw.push(...(await fetchBingItems(q, "Bing News", 12)));
       } catch {
@@ -2245,7 +2385,7 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
     }),
   );
   const seen = new Set<string>();
-  const seenTitleDay = new Set<string>();
+  const seenExact = new Set<string>();
   const cutoff = Date.now() - 150 * 24 * 3600 * 1000;
   const deduped = raw
     .filter((it) => {
@@ -2253,11 +2393,12 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
       it.url = direct;
       if (isGnRelay(direct) || isBingClick(direct) || seen.has(direct)) return false;
       seen.add(direct);
-      // 2026-11-22: same title + source + day arriving under different URLs
-      // is still one item (the Times of India 64.1% piece arrived twice).
-      const dupKey = overseasExactDupKey(it);
-      if (seenTitleDay.has(dupKey)) return false;
-      seenTitleDay.add(dupKey);
+      // Exact duplicates — same title, same source, same publish day under
+      // different syndication URLs (the user's example: two identical
+      // reports of Indian students' NZ visas) — are one item, kept once.
+      const exactKey = `${fullTitleKey(it.title)}|${it.source}|${it.publishedAt ? it.publishedAt.slice(0, 10) : ""}`;
+      if (seenExact.has(exactKey)) return false;
+      seenExact.add(exactKey);
       if (it.publishedAt && new Date(it.publishedAt).getTime() < cutoff) return false;
       // The 2026-11-16 D/S vacatur is one event: every outlet's retelling is
       // dropped here and the column carries the single curated Yale OISS
@@ -2298,11 +2439,11 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
 
   if (deduped.length === 0) {
     await noteRefreshFailure(ctx);
-    const stale = await readCacheStale<OverseasItem[]>(ctx, "overseas:all:v10");
+    const stale = await readCacheStale<OverseasItem[]>(ctx, "overseas:all:v13");
     if (stale) return { items: stale.data, asOf: stale.asOf };
     // Even with no fresh search results, the fixed visa zone stands.
     const pinnedOnly = await mergePinnedVisaItems(ctx, []);
-    const asOf = await writeCache(ctx, "overseas:all:v10", pinnedOnly);
+    const asOf = await writeCache(ctx, "overseas:all:v13", pinnedOnly);
     return { items: pinnedOnly, asOf };
   }
 
@@ -2321,7 +2462,7 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
     )
   ).filter((it): it is FeedItem => it !== null);
 
-  const store = (await readCacheStale<Record<string, OverseasEnrichEntry>>(ctx, "overseas:enrich:v1"))?.data ?? {};
+  const store = (await readCacheStale<Record<string, OverseasEnrichEntry>>(ctx, "overseas:enrich:v2"))?.data ?? {};
 
   // Items whose RSS entry carried no summary get one more grounded chance:
   // the article page's own meta description (the accessible original). If
@@ -2381,7 +2522,13 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
           `- eligibility：摘要明确说大专/专科可申请或接受大专学历，才填 diploma_eligible；明确只面向本科毕业生填 bachelor_only；没写清学历要求一律填 unclear——绝不能把不明确的标成能申请。\n` +
           `- isImmigration：是否属于移民/居留政策（不是学生签证本身的教学类消息）。是移民政策时 identityLabel 必填，写明适用身份（如「毕业生工签申请人」「学生签证持有者」）；不是则填 null。\n` +
           `- visa：这条是否属于学生签证或毕业后工作签证方面的变化——签证申请要求变了、费用变了、可停留期限变了、毕业后工作签证开放或收紧。属于填 true（这类条目会进入固定签证区长期展示）；奖学金、招生、学分认定等非签证消息填 false。\n` +
-          `- pointsZh：2-3 条中文要点，全部来自摘要；无摘要留空数组。\n\n${listing}`,
+          `- pointsZh：2-3 条中文要点，全部来自摘要；无摘要留空数组。\n` +
+          `- category：这条的主栏目，只能选一个。升学、招生、学分衔接、奖学金、语言学校等求学路径填 study；实习、就业岗位、工作许可、学生签证与毕业后工签政策填 work_visa。\n` +
+          `- stage：study 时按适用阶段填 prepare（在读期间可准备）/ diploma（专科毕业可申请）/ bachelor（本科毕业才可申请，如硕士项目）；work_visa 时填 intern（在读实习）/ direct（专科毕业后从中国直接求职）/ overseas_job（海外留学期间及毕业后在当地就业）/ general（阶段不限的签证与移民政策）。\n` +
+          `- kind：具体的招聘岗位填 job；政府发布的工作许可、签证或移民政策填 policy（政策不是岗位，绝不能标成 job）；其他填 news。\n` +
+          `- majorMatch / languageReq / deadline / tuition / livingCost / scholarship：只填摘要明确写出的内容，金额保留原币种并注明按年还是整个项目（如「NZ$32,000/年」）；摘要没写的填 null，绝不估算或编造。deadline 只填摘要明确写出的申请截止说法。\n` +
+          `- 岗位类（kind=job）再填 location（工作地点）、remoteFromChina（能否在中国境内远程参加，摘要没写填 null）、eduReq（学历要求）、expReq（经验要求）、acceptsOverseas（是否接受境外申请，没写填 null）、visaSupport（雇主明确提供签证支持填 yes，明确不提供填 no，没写填 unstated）。\n` +
+          `- 政策类（kind=policy）再填 policyStatus：已生效填 enacted，只是提案/计划/拟议填 proposal，没写清填 unstated。\n\n${listing}`,
         { schema: overseasEnrichSchema, timeout_secs: 110 },
       );
       result.items.forEach((r, j) => {
@@ -2405,6 +2552,22 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
           points: has ? r.pointsZh.map((p) => p.trim()).filter(Boolean).slice(0, 3) : [],
           keep: r.keep,
           visa: r.visa,
+          category: r.category,
+          stage: r.stage,
+          kind: r.kind,
+          majorMatch: r.majorMatch?.trim() || null,
+          languageReq: r.languageReq?.trim() || null,
+          deadline: r.deadline?.trim() || null,
+          tuition: r.tuition?.trim() || null,
+          livingCost: r.livingCost?.trim() || null,
+          scholarship: r.scholarship?.trim() || null,
+          location: r.location?.trim() || null,
+          remoteFromChina: r.remoteFromChina,
+          eduReq: r.eduReq?.trim() || null,
+          expReq: r.expReq?.trim() || null,
+          acceptsOverseas: r.acceptsOverseas,
+          visaSupport: r.visaSupport,
+          policyStatus: r.policyStatus,
         };
       });
     } catch (e) {
@@ -2463,6 +2626,22 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
       official: isInstitutionalHost(host) || /\.gov/.test(host),
       visa: entry?.visa === true,
       pinned: false,
+      category: entry?.category ?? (entry?.visa || entry?.isImmigration ? "work_visa" : "study"),
+      stage: entry?.stage ?? "general",
+      kind: entry?.kind ?? (entry?.visa || entry?.isImmigration ? "policy" : "news"),
+      majorMatch: entry?.majorMatch ?? null,
+      languageReq: entry?.languageReq ?? null,
+      deadline: entry?.deadline ?? null,
+      tuition: entry?.tuition ?? null,
+      livingCost: entry?.livingCost ?? null,
+      scholarship: entry?.scholarship ?? null,
+      location: entry?.location ?? null,
+      remoteFromChina: entry?.remoteFromChina ?? null,
+      eduReq: entry?.eduReq ?? null,
+      expReq: entry?.expReq ?? null,
+      acceptsOverseas: entry?.acceptsOverseas ?? null,
+      visaSupport: entry?.visaSupport ?? "unstated",
+      policyStatus: entry?.policyStatus ?? null,
     });
   }
   items.sort((a, b) => {
@@ -2470,18 +2649,45 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
     const tb = b.publishedAt ? new Date(b.publishedAt).getTime() : 0;
     return tb - ta;
   });
-  // 2026-11-22: homepage rules — exact duplicates and same-event retellings
-  // collapse to one entry, and items that clearly do not apply to this user
-  // leave the column (pinned zone included; see applyOverseasHomepageRules).
-  const cleaned = applyOverseasHomepageRules(items);
+  // Applicability first (user rule, 2026-11-22): items that clearly do not
+  // apply to the user leave the homepage entirely — not pinned, not in the
+  // rotating list, not behind the bachelor-only toggle.
+  const applicable = items.filter((it) => !isNotApplicableToUser(it));
+  // One event, one entry — also across the rotating list: same-event
+  // retellings collapse to one, preferring the official source, then the
+  // newest version.
+  const dedupedEvents: OverseasItem[] = [];
+  const byPreference = [...applicable].sort((a, b) => {
+    if (a.official !== b.official) return a.official ? -1 : 1;
+    const ta = a.publishedAt ? new Date(a.publishedAt).getTime() : 0;
+    const tb = b.publishedAt ? new Date(b.publishedAt).getTime() : 0;
+    return tb - ta;
+  });
+  for (const it of byPreference) {
+    if (dedupedEvents.some((kept) => sameOverseasEvent(kept, it))) continue;
+    dedupedEvents.push(it);
+  }
+  dedupedEvents.sort((a, b) => {
+    const ta = a.publishedAt ? new Date(a.publishedAt).getTime() : 0;
+    const tb = b.publishedAt ? new Date(b.publishedAt).getTime() : 0;
+    return tb - ta;
+  });
   // Fixed visa zone: visa-classified discoveries join the pinned store and
-  // stay across refreshes; the curated items (D/S ruling, NZ PSWV, UK
-  // Graduate visa, Korea reform plan, Singapore work-pass thresholds)
-  // always anchor it. Pinned items are removed from the rotating list so
-  // each appears exactly once.
-  const pinned = await mergePinnedVisaItems(ctx, cleaned.filter((it) => it.visa));
+  // stay across refreshes; the curated items anchor it ONLY when they pass
+  // the applicability check above (mergePinnedVisaItems applies the same
+  // rule) — since 2026-11-22 the zone holds the Yale D/S ruling, the
+  // Singapore MOM thresholds and the Japan language-school rule; the NZ /
+  // UK bachelor-only items and the Korea pilot are out because they
+  // clearly do not apply to the user. Pinned items are removed from the
+  // rotating list so each appears exactly once.
+  const pinned = await mergePinnedVisaItems(ctx, dedupedEvents.filter((it) => it.visa));
   const pinnedUrls = new Set(pinned.map((it) => it.url));
-  const rotating = cleaned.filter((it) => !pinnedUrls.has(it.url));
+  // One event, one entry across BOTH zones: a rotating item that retells
+  // an event a pinned item already carries (same event, different URL —
+  // e.g. a second outlet's India–NZ FTA piece) is dropped, not shown twice.
+  const rotating = dedupedEvents.filter(
+    (it) => !pinnedUrls.has(it.url) && !pinned.some((p) => sameOverseasEvent(p, it)),
+  );
   const all = [...pinned, ...rotating];
 
   const bounded: Record<string, OverseasEnrichEntry> = {};
@@ -2489,8 +2695,8 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
     if (Object.keys(bounded).length >= 200) break;
     bounded[url] = e;
   }
-  await writeCache(ctx, "overseas:enrich:v1", bounded);
-  const asOf = await writeCache(ctx, "overseas:all:v10", all);
+  await writeCache(ctx, "overseas:enrich:v2", bounded);
+  const asOf = await writeCache(ctx, "overseas:all:v13", all);
   return { items: all, asOf };
 }
 
@@ -2668,6 +2874,7 @@ const learningItemSchema = z.object({
   audienceStage: z.string().nullable(),
   deadline: z.string().nullable(),
   needsApplication: z.boolean(),
+  relevance: z.string(),
 });
 
 const jiangxiItemSchema = z.object({
@@ -2687,6 +2894,8 @@ const jiangxiItemSchema = z.object({
   isReference: z.boolean(),
   official: z.boolean(),
   repost: z.boolean(),
+  noticeKind: z.enum(["formal2028", "reference", "unconfirmed"]),
+  canApplyMajor: z.boolean().nullable(),
 });
 
 const overseasItemSchema = z.object({
@@ -2709,12 +2918,205 @@ const overseasItemSchema = z.object({
   official: z.boolean(),
   visa: z.boolean(),
   pinned: z.boolean(),
+  category: z.enum(["study", "work_visa"]),
+  stage: z.enum(["prepare", "diploma", "bachelor", "intern", "direct", "overseas_job", "general"]),
+  kind: z.enum(["news", "job", "policy"]),
+  relevance: z.string(),
+  majorMatch: z.string().nullable(),
+  languageReq: z.string().nullable(),
+  deadline: z.string().nullable(),
+  tuition: z.string().nullable(),
+  livingCost: z.string().nullable(),
+  scholarship: z.string().nullable(),
+  location: z.string().nullable(),
+  remoteFromChina: z.boolean().nullable(),
+  eduReq: z.string().nullable(),
+  expReq: z.string().nullable(),
+  acceptsOverseas: z.boolean().nullable(),
+  visaSupport: z.enum(["yes", "no", "unstated"]),
+  policyStatus: z.enum(["enacted", "proposal", "unstated"]).nullable(),
 });
 
 const worldItemSchema = feedItemSchema.extend({
   topic: z.string(),
   weekly: z.boolean(),
+  relevance: z.string(),
 });
+
+// ---------------------------------------------------------------------------
+// Boundary normalizers: cached/internal rows may predate the 2026-11-22
+// five-category restructure; the response schemas always carry the new
+// fields, filled honestly (null / "unstated") when the source never stated
+// them — never guessed.
+// ---------------------------------------------------------------------------
+
+function overseasRelevance(it: OverseasItem): string {
+  if (it.eligibility === "diploma_eligible")
+    return "来源明确接受专科背景，与你直接相关，可点开看条件和截止日期。";
+  if (it.kind === "policy")
+    return `这是${it.country}的政策动态，不是岗位；适用身份：${it.identityLabel ?? it.whoApplies ?? "见原文"}，会影响你之后去${it.country}读书或工作的安排。`;
+  if (it.kind === "job")
+    return `岗位在${it.location ?? it.country}，与信息安全、网络运维或 IT 支持方向相关；签证支持${it.visaSupport === "yes" ? "雇主已明确提供" : it.visaSupport === "no" ? "雇主明确不提供" : "未说明"}，点开看完整要求。`;
+  return it.whoApplies
+    ? `适用于：${it.whoApplies}。适用学历${it.eligibility === "bachelor_only" ? "仅限本科毕业生" : "未写清"}，点开核对再决定。`
+    : "来源未写清适用人群，点开看原文再判断和你的关系。";
+}
+
+function normalizeOverseas(it: OverseasItem): z.infer<typeof overseasItemSchema> {
+  const category: OverseasCategory = it.category ?? (it.visa || it.isImmigration ? "work_visa" : "study");
+  const kind: "news" | "job" | "policy" = it.kind ?? (it.visa || it.isImmigration ? "policy" : "news");
+  return {
+    title: it.title,
+    url: it.url,
+    source: it.source,
+    publishedAt: it.publishedAt,
+    country: it.country,
+    whatChanged: it.whatChanged,
+    whoApplies: it.whoApplies,
+    effectiveWhen: it.effectiveWhen,
+    eligibility: it.eligibility,
+    isImmigration: it.isImmigration,
+    identityLabel: it.identityLabel,
+    points: it.points,
+    titleOnly: it.titleOnly,
+    readUrl: it.readUrl,
+    needsLogin: it.needsLogin,
+    blockedReason: it.blockedReason,
+    official: it.official,
+    visa: it.visa,
+    pinned: it.pinned,
+    category,
+    stage: it.stage ?? (kind === "policy" ? "general" : category === "study" ? "diploma" : "general"),
+    kind,
+    relevance: overseasRelevance(it),
+    majorMatch: it.majorMatch ?? null,
+    languageReq: it.languageReq ?? null,
+    deadline: it.deadline ?? null,
+    tuition: it.tuition ?? null,
+    livingCost: it.livingCost ?? null,
+    scholarship: it.scholarship ?? null,
+    location: it.location ?? null,
+    remoteFromChina: it.remoteFromChina ?? null,
+    eduReq: it.eduReq ?? null,
+    expReq: it.expReq ?? null,
+    acceptsOverseas: it.acceptsOverseas ?? null,
+    visaSupport: it.visaSupport ?? "unstated",
+    policyStatus: it.policyStatus ?? (kind === "policy" ? "unstated" : null),
+  };
+}
+
+const WORLD_TOPIC_RELEVANCE: Record<string, string> = {
+  "国内经济": "国内经济走向会影响你毕业时的就业环境和专升本后的升学选择。",
+  "国外经济": "海外经济变化会影响留学费用和毕业后的海外就业机会。",
+  "经济": "经济走向会影响你毕业时的就业环境与留学成本。",
+  "政治": "国际政治变化可能影响签证、留学与出行安排，先了解背景。",
+  "科技": "科技动态与你的信息安全专业学习方向相关。",
+  "网络安全": "与你的信息安全技术应用专业直接相关，也是你以后求职的核心领域。",
+  "出行安全": "关系到你以后出国读书、实习和旅行时的人身安全。",
+  "留学安全": "关系到中国留学生在海外的安全与权益，与你可能的出国计划直接相关。",
+  "地区冲突": "地区局势会影响留学目的地选择和出行安全，先了解背景。",
+  "书籍": "本周阅读精选，适合利用课余时间拓展视野。",
+  "历史": "本周阅读精选，适合利用课余时间拓展视野。",
+  "语言学习": "语言能力是出国和求职的门槛，读物精选放在每周；具体课程和考试报名在学习栏。",
+};
+
+function normalizeWorld(it: WorldItem): z.infer<typeof worldItemSchema> {
+  return { ...it, relevance: WORLD_TOPIC_RELEVANCE[it.topic] ?? "按重要性筛出的国内外要闻，了解背景即可。" };
+}
+
+function normalizeLearning(it: LearningItem): z.infer<typeof learningItemSchema> {
+  const fixed = correctLearningItem(it);
+  return {
+    ...fixed,
+    relevance: fixed.summaryZh ?? "点开看适合谁、能学到什么；学段、费用和截止日期都以官方入口为准。",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 综合热榜 (restored 2026-11-22 at the user's request: kept at the bottom
+// of the homepage, collapsed by default; the entertainment category is
+// NOT restored). Direct platform JSON APIs, as originally tested.
+// ---------------------------------------------------------------------------
+
+interface HotItem { rank: number; title: string; url: string; heat: string | null }
+interface HotSourceData { id: string; label: string; items: HotItem[] }
+
+const HOT_TTL_MS = 45 * 60 * 1000;
+
+async function fetchJson(url: string, headers?: Record<string, string>): Promise<unknown> {
+  const res = await fetch(url, { headers: { "User-Agent": UA, ...(headers ?? {}) } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()) as unknown;
+}
+
+async function loadHotLists(ctx: Ctx, force: boolean): Promise<{ sources: HotSourceData[]; asOf: string }> {
+  if (!force) {
+    const cached = await readCache<HotSourceData[]>(ctx, "hot:all:v1", HOT_TTL_MS);
+    if (cached) return { sources: cached.data, asOf: cached.asOf };
+  }
+  const sources: HotSourceData[] = [];
+  const jobs: Array<Promise<HotSourceData | null>> = [
+    (async () => {
+      const j = (await fetchJson("https://weibo.com/ajax/side/hotSearch", { Referer: "https://weibo.com/" })) as {
+        data?: { realtime?: Array<{ word_scheme?: string; note?: string; num?: number }> };
+      };
+      const items = (j.data?.realtime ?? []).slice(0, 20).map((r, i) => ({
+        rank: i + 1,
+        title: (r.word_scheme ?? r.note ?? "").replace(/^#|#$/g, ""),
+        url: `https://s.weibo.com/weibo?q=${encodeURIComponent(r.word_scheme ?? r.note ?? "")}`,
+        heat: r.num ? String(r.num) : null,
+      })).filter((it) => it.title);
+      return items.length ? { id: "weibo", label: "微博热搜", items } : null;
+    })(),
+    (async () => {
+      const j = (await fetchJson("https://top.baidu.com/api/board?platform=wise&tab=realtime")) as {
+        data?: { cards?: Array<{ content?: Array<{ word?: string; url?: string }> }> };
+      };
+      const flat = (j.data?.cards ?? []).flatMap((c) => c.content ?? []);
+      const items = flat.slice(0, 20).map((r, i) => ({
+        rank: i + 1,
+        title: r.word ?? "",
+        url: r.url ?? `https://www.baidu.com/s?wd=${encodeURIComponent(r.word ?? "")}`,
+        heat: null,
+      })).filter((it) => it.title);
+      return items.length ? { id: "baidu", label: "百度热搜", items } : null;
+    })(),
+    (async () => {
+      const j = (await fetchJson("https://www.toutiao.com/hot-event/hot-board/?origin=toutiao_pc")) as {
+        data?: Array<{ Title?: string; Url?: string }> };
+      const items = (j.data ?? []).slice(0, 20).map((r, i) => ({
+        rank: i + 1,
+        title: r.Title ?? "",
+        url: r.Url ?? "",
+        heat: null,
+      })).filter((it) => it.title && it.url);
+      return items.length ? { id: "toutiao", label: "今日头条", items } : null;
+    })(),
+    (async () => {
+      const j = (await fetchJson("https://api.bilibili.com/x/web-interface/popular?ps=15&pn=1")) as {
+        code?: number;
+        data?: { list?: Array<{ title?: string; bvid?: string }> };
+      };
+      const items = (j.data?.list ?? []).slice(0, 15).map((r, i) => ({
+        rank: i + 1,
+        title: r.title ?? "",
+        url: r.bvid ? `https://www.bilibili.com/video/${r.bvid}` : "",
+        heat: null,
+      })).filter((it) => it.title && it.url);
+      return items.length ? { id: "bilibili", label: "B站热门", items } : null;
+    })(),
+  ];
+  for (const r of await Promise.allSettled(jobs)) {
+    if (r.status === "fulfilled" && r.value) sources.push(r.value);
+  }
+  if (sources.length === 0) {
+    const stale = await readCacheStale<HotSourceData[]>(ctx, "hot:all:v1");
+    if (stale) return { sources: stale.data, asOf: stale.asOf };
+    return { sources: [], asOf: new Date().toISOString() };
+  }
+  const asOf = await writeCache(ctx, "hot:all:v1", sources);
+  return { sources, asOf };
+}
 
 // ---------------------------------------------------------------------------
 // Actions
@@ -2883,7 +3285,7 @@ export const Actions = {
           continue;
         }
         // Only content caches count as a successful update (not detail lookups).
-        if (!/^(news:|feed:|learning:|jiangxi:|overseas:|world:)/.test(r.key)) continue;
+        if (!/^(news:|feed:|learning:|jiangxi:|overseas:|world:|hot:)/.test(r.key)) continue;
         if (r.key.includes(":enrich:") || r.key.includes(":dropped:")) continue;
         if (!max || r.fetchedAt.getTime() > max.getTime()) max = r.fetchedAt;
       }
@@ -3007,7 +3409,7 @@ export const Actions = {
 
   getLearning: defineAction({
     description:
-      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip.",
+      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生）, pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等） and expired intakes are all filtered out, so the list may honestly be empty. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip.",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -3016,10 +3418,15 @@ export const Actions = {
     }),
     async handler(ctx, args) {
       const loaded = await loadLearning(ctx, args.force);
-      // 2026-11-22: homepage shows only what the user can still join, watch
-      // a replay of, or start learning directly (see isLearningHomepageItem);
-      // ended events and other-stage items are filtered from cached data too.
-      const items = loaded.items.map(correctLearningItem).filter(isLearningHomepageItem);
+      const todayStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
+      // The strict 只留能参加的 filter applies to the FULL list on every
+      // response (2026-11-22), not only at ingest: a cached payload written
+      // before a rule existed — pure news reports, industry forums,
+      // foreign-country-only offers, expired intakes — is filtered here
+      // too, so the 学习 tab and the homepage 本周学习 strip always agree.
+      const items = loaded.items
+        .map(normalizeLearning)
+        .filter((it) => !isLearningNotActionable(it, todayStr));
       const asOf = loaded.asOf;
       // "可报名" list: only deadlines from today (Asia/Shanghai) through the
       // next 30 days — expired opportunities are excluded here and badged
@@ -3029,7 +3436,6 @@ export const Actions = {
       // confirmed does not enter this list at all. Courses/lectures and
       // learning resources are unaffected — they are not application
       // items and keep showing in the full list as before.
-      const todayStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
       const limit = new Date(`${todayStr}T00:00:00`);
       limit.setDate(limit.getDate() + 30);
       const limitStr = `${limit.getFullYear()}-${String(limit.getMonth() + 1).padStart(2, "0")}-${String(limit.getDate()).padStart(2, "0")}`;
@@ -3142,7 +3548,7 @@ export const Actions = {
 
   getJiangxi: defineAction({
     description:
-      "Returns the 江西专升本 column for a Jiangxi 专科 student （信息安全技术应用， 2028 年毕业）: official-first notices about 报名/考试科目/专业对照/招生简章， each with applicable year, relevance to the major and what to do. Past-year items are flagged isReference （备考参考）; the pending list marks each 2028 matter as 待公布 until a 2028 notice covers it.",
+      "Returns the 江西专升本 column for a Jiangxi 专科 student （信息安全技术应用， 2028 年毕业）: official-first notices about 报名/考试科目/专业对照/招生简章， each with applicable year, relevance to the major and what to do. Training-institution marketing （机构评测/测评等） and 高考择校 content for gaokao students choosing a 专科 school are hidden at ingest — he is already a second-year student. Past-year items are flagged isReference （备考参考）; the pending list marks each 2028 matter as 待公布 until a 2028 notice covers it.",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -3152,9 +3558,7 @@ export const Actions = {
     }),
     async handler(ctx, args) {
       const { items, asOf } = await loadJiangxi(ctx, args.force);
-      // 2026-11-22: 培训机构营销与高考择校内容不进首页（也过滤已缓存的条目）。
-      const visible = items.filter((it) => !isJiangxiHomepageExcluded(it));
-      const current = visible.filter((it) => !it.isReference);
+      const current = items.filter((it) => !it.isReference);
       const covers = (tag: JiangxiTag) => current.some((it) => it.tag === tag);
       const pending = [
         { label: "2028 年报名通知", status: covers("报名") ? "已有 2028 年消息，见下方" : "待公布" },
@@ -3162,13 +3566,13 @@ export const Actions = {
         { label: "2028 年专业对照表", status: covers("专业对照") ? "已有 2028 年消息，见下方" : "待公布" },
         { label: "2028 年招生简章", status: covers("招生简章") ? "已有 2028 年消息，见下方" : "待公布" },
       ];
-      return { items: visible, pending, asOf, hasTodayUpdate: visible.some((it) => isTodayShanghai(it.publishedAt)) };
+      return { items, pending, asOf, hasTodayUpdate: items.some((it) => isTodayShanghai(it.publishedAt)) };
     },
   }),
 
   getOverseas: defineAction({
     description:
-      "Returns decision-changing overseas opportunities and policy changes for a Chinese 专科 (diploma) student across the US, New Zealand, Singapore, Vietnam, Japan, South Korea, Ireland and the UK: what changed, who it applies to and when it takes effect, with the original university/government link. Student-visa and post-study-work-visa changes carry visa=true and live in a fixed zone (pinned=true): they persist across daily refreshes and are only removed when superseded by a newer item on the same topic or expired. Applicability comes before pinning (2026-11-22): items that clearly do not apply to this user — bachelor_only, or text stating so — are removed from the homepage, pinned or not. Same-event items collapse to one entry (exact duplicates by title+source+day, and same-event retellings by country+topic+number). Unclear eligibility stays 'unclear' and is never presented as diploma-eligible. Immigration items carry an identityLabel.",
+      "Returns decision-changing overseas opportunities and policy changes for a Chinese 专科 (diploma) student across the US, New Zealand, Singapore, Vietnam, Japan, South Korea, Ireland and the UK: what changed, who it applies to and when it takes effect, with the original university/government link. Applicability is checked BEFORE pinning (2026-11-22): an item that clearly does not apply to the user — bachelor_only, or its own text says 不适用于我 / 不含信息安全技术应用 — is excluded from the column entirely, fixed visa zone included (so the zone now holds the Yale D/S ruling, Singapore MOM thresholds and the Japan language-school rule; the bachelor-only NZ/UK items and the Korea pilot are out). One event, one entry: exact duplicates (same title/source/day) and same-event retellings are merged, keeping the official/newest version. Student-visa and post-study-work-visa changes carry visa=true and live in a fixed zone (pinned=true): they persist across daily refreshes and are only removed when superseded by a newer item on the same topic, expired, or ruled not applicable. Unclear eligibility stays 'unclear' and is never presented as diploma-eligible. Immigration items carry an identityLabel.",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -3177,10 +3581,8 @@ export const Actions = {
     }),
     async handler(ctx, args) {
       const { items, asOf } = await loadOverseas(ctx, args.force);
-      // 2026-11-22: homepage rules also filter already-cached items, so the
-      // duplicates and not-applicable pinned entries disappear immediately.
-      const visible = applyOverseasHomepageRules(items);
-      return { items: visible, asOf, hasTodayUpdate: visible.some((it) => isTodayShanghai(it.publishedAt)) };
+      const normalized = items.map(normalizeOverseas);
+      return { items: normalized, asOf, hasTodayUpdate: items.some((it) => isTodayShanghai(it.publishedAt)) };
     },
   }),
 
@@ -3195,12 +3597,128 @@ export const Actions = {
       all: z.array(worldItemSchema),
     }),
     async handler(ctx, args) {
-      return await loadMyWorld(ctx, args.force);
+      const r = await loadMyWorld(ctx, args.force);
+      return {
+        asOf: r.asOf,
+        daily: r.daily.map(normalizeWorld),
+        weekly: r.weekly.map(normalizeWorld),
+        all: r.all.map(normalizeWorld),
+      };
+    },
+  }),
+
+  getHotLists: defineAction({
+    description: "Returns the 综合热榜： platform hot lists （微博/百度/头条/B站） with each platform's own ranking. Shown at the bottom of the homepage, collapsed by default (restored 2026-11-22 at the user's request; the entertainment news category stays removed).",
+    request: z.object({ force: z.boolean().default(false) }),
+    response: z.object({
+      asOf: z.string(),
+      sources: z.array(
+        z.object({
+          id: z.string(),
+          label: z.string(),
+          items: z.array(z.object({ rank: z.number(), title: z.string(), url: z.string(), heat: z.string().nullable() })),
+        }),
+      ),
+    }),
+    async handler(ctx, args) {
+      return await loadHotLists(ctx, args.force);
+    },
+  }),
+
+  getDailyDigest: defineAction({
+    description: "Returns the homepage 近期可申请 strip: at most 5 currently-applicable opportunities merged across 海外升学 / 海外实习、工作与签证 / 学习与实践. An item qualifies only when it clearly applies to the user (not bachelor-only, not self-described as 不适用于我）, has a usable entry link, and — preferred — a stated application deadline; official sources rank first, then items with deadlines, then newest. Policies are never listed as 岗位可申请. When nothing qualifies the list is honestly empty and the homepage shows 「暂无符合条件的新机会」.",
+    request: z.object({ force: z.boolean().default(false) }),
+    response: z.object({
+      asOf: z.string(),
+      items: z.array(
+        z.object({
+          title: z.string(),
+          url: z.string(),
+          source: z.string(),
+          publishedAt: z.string().nullable(),
+          deadline: z.string().nullable(),
+          effectiveWhen: z.string().nullable(),
+          relevance: z.string(),
+          categoryLabel: z.string(),
+          country: z.string().nullable(),
+          stage: z.string(),
+          official: z.boolean(),
+        }),
+      ),
+    }),
+    async handler(ctx, args) {
+      const [ov, le] = await Promise.all([loadOverseas(ctx, args.force), loadLearning(ctx, args.force)]);
+      type DigestItem = {
+        title: string; url: string; source: string; publishedAt: string | null;
+        deadline: string | null; effectiveWhen: string | null; relevance: string;
+        categoryLabel: string; country: string | null; stage: string; official: boolean;
+      };
+      const pool: DigestItem[] = [];
+      for (const raw of ov.items) {
+        const it = normalizeOverseas(raw);
+        if (it.kind === "policy") continue; // a policy is never an application target
+        // Only genuinely actionable items qualify: an actual job posting, a
+        // stated application deadline, or a source-confirmed diploma-eligible
+        // opening. Plain news about overseas study never counts as 可申请.
+        if (it.kind !== "job" && !it.deadline && it.eligibility !== "diploma_eligible") continue;
+        if (it.eligibility === "bachelor_only") continue;
+        if (!it.readUrl && !it.url) continue;
+        if (it.blockedReason) continue;
+        pool.push({
+          title: it.title,
+          url: it.readUrl ?? it.url,
+          source: it.source,
+          publishedAt: it.publishedAt,
+          deadline: it.deadline,
+          effectiveWhen: it.effectiveWhen,
+          relevance: it.relevance,
+          categoryLabel: it.category === "study" ? "海外升学" : "海外实习、工作与签证",
+          country: it.country,
+          stage: it.stage,
+          official: it.official,
+        });
+      }
+      const todayStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
+      for (const raw of le.items) {
+        const it = normalizeLearning(raw);
+        if (!it.needsApplication || !it.officialUrl) continue;
+        if (!it.deadline || it.deadline < todayStr) continue;
+        pool.push({
+          title: it.title,
+          url: it.officialUrl,
+          source: it.source,
+          publishedAt: it.publishedAt,
+          deadline: it.deadline,
+          effectiveWhen: null,
+          relevance: it.relevance,
+          categoryLabel: "学习与实践",
+          country: null,
+          stage: it.audienceStage ?? "",
+          official: true,
+        });
+      }
+      const seen = new Set<string>();
+      const deduped = pool.filter((it) => {
+        const k = fullTitleKey(it.title);
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+      deduped.sort((a, b) => {
+        if (a.official !== b.official) return a.official ? -1 : 1;
+        const ad = a.deadline ? 0 : 1;
+        const bd = b.deadline ? 0 : 1;
+        if (ad !== bd) return ad - bd;
+        const ta = a.publishedAt ? new Date(a.publishedAt).getTime() : 0;
+        const tb = b.publishedAt ? new Date(b.publishedAt).getTime() : 0;
+        return tb - ta;
+      });
+      return { items: deduped.slice(0, 5), asOf: new Date().toISOString() };
     },
   }),
 
   refreshAll: defineAction({
-    description: "Refreshes every cache: the three homepage columns, the learning column, all news categories, and every followed feed. Used by the daily schedule and first-load warm-up. (Platform hot lists were removed 2026-11-21 and are no longer refreshed.)",
+    description: "Refreshes every cache: the five homepage categories, the learning column, all news categories, the platform hot lists, and every followed feed. Used by the daily schedule and first-load warm-up.",
     request: z.object({}),
     response: z.object({ ok: z.literal(true), refreshedAt: z.string() }),
     async handler(ctx): Promise<{ ok: true; refreshedAt: string }> {
@@ -3208,7 +3726,7 @@ export const Actions = {
       // deadline-sensitive step, so it must not queue behind nine sequential
       // category fetches (that ordering is what starved it of inference time).
       await loadLearning(ctx, true);
-      await Promise.all([loadJiangxi(ctx, true), loadOverseas(ctx, true), loadMyWorld(ctx, true)]);
+      await Promise.all([loadJiangxi(ctx, true), loadOverseas(ctx, true), loadMyWorld(ctx, true), loadHotLists(ctx, true)]);
       await Promise.all(CATEGORIES.map((cat) => loadCategory(ctx, cat.id, true)));
       const db = ctx.db;
       const subs = await db.select().from(schema.subscriptions);
