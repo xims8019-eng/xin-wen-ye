@@ -1,0 +1,15 @@
+node_modules/
+.bun-cache/
+app.db
+app.db-shm
+app.db-wal
+client/dist/
+client/dist-cvm/
+server/dist/
+.space-build/
+.space-build-cvm/
+audits/
+.env
+.env.local
+*.log
+.DS_Store

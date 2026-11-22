@@ -1,0 +1,36 @@
+# 链接解析、去重与屏蔽规则说明
+
+对应代码：`server/src/actions.ts` 的 `parseFeed`、`decodeBingClick`、`resolveGnUrl` / `resolveGnShared`、`resolveMsnUrl`、`resolveCategoryIngest`、`verifyPublisherPage`、`fetchArticleMeta`、`cnBlockedReason`、各栏目的事件匹配器和 `mergePinnedVisaItems`。
+
+核心原则：**任何中转链接都不入库**。所有分类、所有栏目在存进缓存之前，都要把链接解析成发布方的直达地址；解析不到的，要么丢弃条目（学习/海外），要么只保留标题和摘要、链接留空（分类新闻，页面只给「复制标题」）。
+
+## 三种中转链接怎么解
+
+| 中转形式 | 解法 | 代码 |
+| --- | --- | --- |
+| Bing 资讯点击链接 `bing.com/news/apiclick.aspx?...&url=<编码后的发布方地址>` | 解析时直接取 `url` 参数解码，就是发布方直达地址 | `decodeBingClick`（在 `parseFeed` 里调用） |
+| Google 新闻 `news.google.com/rss/articles/<token>` | 取文章页里的 `data-n-a-id/ts/sg` 参数，走 `_/DotsSplashUi/data/batchexecute?rpcids=Fbv4je` 换出发布方地址；8 秒超时，解不出来返回 null | `resolveGnUrl`；结果缓存在 `gn:resolved:v2`，分类/详情/学习共用 |
+| MSN 转载 `msn.com` / `msn.cn` | 用爬虫 UA 打开文章页，读 `<link rel="canonical">`，它指向原发布方的文章地址；来源名去掉「 on MSN」后缀 | `resolveMsnUrl` |
+
+## 分类新闻的入库四步（`resolveCategoryIngest`，全站 9 个分类都走）
+
+1. 并行批解：Google 新闻中转按每批 5 条并行 batchexecute 解码（走共享缓存）。
+2. 顺序重试：Google 会对并行突发限流（间歇 429/验证码），没解出的逐条带间隔重试。
+3. 验证直达地址：`verifyPublisherPage` 打开每个解出的地址，只有 404/410、最终仍跳回 Google 域名、或 2xx/3xx 却不是 HTML 时才判死并清掉链接；403/5xx/网络错误保留地址（沙箱环境证明不了它对读者打不开）。
+4. 补真实描述：有直达地址但没摘要的条目，取文章页自己的 meta 描述当摘要（`fetchArticleMeta`，含乱码防护）；仍没有就保持「仅有标题」。
+
+四步之后还带着中转 token 的条目，链接存空字符串 `url: ""`，页面渲染为无链接行（摘要 + 复制标题，没有展开详情、没有收藏按钮）。
+
+学习、江西、海外三栏在各自的加载函数里做等价处理：学习栏解不出的中转条目直接丢弃不入库；海外栏的 MSN 转载在入库前解析。
+
+## 同一事件只留一条（去重）
+
+- 通用层：按链接去重；「我关注的世界」再按标题归一化键（去空格标点取前 14 字）合并同一事件。
+- 签证固定区有五个「同一事件只留一条」的事件匹配器，命中转述就在入库和固定区合并两处丢弃：美国 D/S 裁决（`isDsRulingEventText`，含「学生签证 + 禁令/固定期限」的英文形态）、新西兰毕业后工签扩大（`isNzPswvEventText`）、英国毕业生签证缩短（`isUkGraduateCutEventText`）、日本语言学校 A1 证明新规（`isJpLanguageSchoolEventText`）、韩国 16 专业技术试点（`isKrTechPilotEventText`）。每个事件只保留人工核实的那一条（见 `config/columns.json` 的 `pinnedVisaItems`）。
+
+## 屏蔽与禁用名单
+
+- **中国境内打不开**（`CN_BLOCKED_DOMAINS`）：目前只有 `wfyi.org`（Amazon CloudFront 配置为屏蔽中国访问，用户 2026-11-21 在中国境内实测 403 确认）。命中条目保留页内中文摘要、标「中国境内打不开」、不给出打不开的原文按钮；有已验证可访问的官方/替代链接时给替代链接。这份名单只收用户在中国境内实测确认的域名——境外服务器抓取结果证明不了中国境内能不能打开，不要凭抓取结果往里加。
+- **固定区禁用来源**（`PINNED_VISA_BLOCKED_HOSTS`）：`dayonekorea.com`、`gistreel.com`。前者是商业博客冒充韩国法务部原文，后者是新西兰工签事件的转述且生效日期写错；两个域名被硬性禁止进入签证固定区（按条目链接和阅读链接双查）。
+- **海外栏旧评论清理**（`isStaleVisaOpinionItem`）：意见/评论/社论类的学生签证文章超过 45 天不收；另有两篇 2026 年 8 月的评论（Good Men Project、independent.org）按标题+来源点名删除，入库前就丢弃，刷新不会把它们带回来。
+- **需要登录提示**：标题或来源命中纽约时报、华尔街日报、金融时报、经济学人、彭博、财新等关键词时，条目标 `needsLogin`，页面在原文按钮旁提示「该来源可能需要登录/订阅」（只是提示，不屏蔽）。

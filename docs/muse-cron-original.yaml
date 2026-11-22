@@ -1,0 +1,18 @@
+---
+id: xin-wen-ye-daily-refresh
+enabled: true
+owner: goal:personal-news-page
+execution:
+  kind: space_action
+  slug: xin-wen-ye
+  action: refreshAll
+  args: {}
+mode: task
+schedule:
+  kind: daily
+  timezone: '@user.current'
+  time: 08:02:46
+---
+Invoke the web artifact's published scheduled action and retain its run history.
+# 说明：@user.current 对当前用户即 Asia/Shanghai (UTC+8)，界面显示为「每天 08:02 · Asia/Shanghai (UTC+8)」。
+# 此文件是 Muse 托管格式（2026-11-21 导出时的实际定义），自有环境请改用 docs/cron.md 里的 crontab / GitHub Actions / Vercel 写法。
