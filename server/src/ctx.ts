@@ -27,8 +27,8 @@
 import { createClient as createHttpClient } from "@libsql/client/http";
 import { drizzle as drizzleHttp } from "drizzle-orm/libsql/http";
 import type { LibSQLDatabase } from "drizzle-orm/libsql/driver-core";
-import * as schema from "./schema";
-import { createInference, type Inference } from "./llm";
+import * as schema from "./schema.js";
+import { createInference, type Inference } from "./llm.js";
 
 export interface Ctx {
   db: LibSQLDatabase<typeof schema>;

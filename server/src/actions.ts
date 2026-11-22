@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { asc, eq } from "drizzle-orm";
-import * as schema from "./schema";
-import type { Ctx } from "./ctx";
-import { completeInference } from "./llm";
+import * as schema from "./schema.js";
+import type { Ctx } from "./ctx.js";
+import { completeInference } from "./llm.js";
 
 // ---------------------------------------------------------------------------
 // Local replacement for the SDK's `defineAction` (previously provided by

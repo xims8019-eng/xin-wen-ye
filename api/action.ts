@@ -5,9 +5,9 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
-import { Actions } from "../server/src/actions";
-import type { Ctx } from "../server/src/ctx";
-import { getCtx } from "../server/src/ctx";
+import { Actions } from "../server/src/actions.js";
+import type { Ctx } from "../server/src/ctx.js";
+import { getCtx } from "../server/src/ctx.js";
 
 export const maxDuration = 60;
 

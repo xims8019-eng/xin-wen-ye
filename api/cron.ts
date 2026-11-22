@@ -7,8 +7,8 @@
 // is unauthenticated, so set one in production.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { Actions } from "../server/src/actions";
-import { getCtx } from "../server/src/ctx";
+import { Actions } from "../server/src/actions.js";
+import { getCtx } from "../server/src/ctx.js";
 
 export const maxDuration = 60;
 
