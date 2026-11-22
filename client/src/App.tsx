@@ -749,6 +749,14 @@ function JiangxiSection() {
 
 function OverseasRow({ item }: { item: OverseasItem }) {
   const [open, setOpen] = useState(false);
+  // Yale D/S card only (the one item carrying decisionDateLabel): its
+  // effectiveWhen repeats the full body text verbatim, so in the expanded
+  // view the 「政策生效」 and 「何时生效」 lines are not rendered — the
+  // body stays exactly once, under 「变了什么」 — and the court-decision
+  // date is not repeated inside the expanded panel (it already shows in
+  // the header line above). The collapsed rendering and the underlying
+  // data fields are unchanged.
+  const dedupeExpanded = open && item.decisionDateLabel != null;
   return (
     <li className="border-b border-[var(--border)] py-3">
       <button
@@ -800,7 +808,7 @@ function OverseasRow({ item }: { item: OverseasItem }) {
           <span className="text-[var(--accent)]">· {open ? "收起 ▴" : item.kind === "policy" ? "展开详情 ▾" : "展开看条件 ▾"}</span>
         </p>
         <p className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-[var(--dim)]">
-          <span>政策生效：{item.effectiveWhen ?? "未公布"}</span>
+          {dedupeExpanded ? null : <span>政策生效：{item.effectiveWhen ?? "未公布"}</span>}
           {item.decisionDateLabel ? <span className="font-medium text-[var(--text)]">{item.decisionDateLabel}</span> : null}
           {item.kind === "policy" ? null : <span>申请截止：{item.deadline ?? "未说明"}</span>}
         </p>
@@ -818,10 +826,12 @@ function OverseasRow({ item }: { item: OverseasItem }) {
             <dt className="inline font-medium text-[var(--text)]">适用于谁：</dt>
             <dd className="inline">{item.whoApplies ?? "来源未写明适用人群"}</dd>
           </div>
-          <div>
-            <dt className="inline font-medium text-[var(--text)]">何时生效：</dt>
-            <dd className="inline">{item.effectiveWhen ?? "未公布"}</dd>
-          </div>
+          {dedupeExpanded ? null : (
+            <div>
+              <dt className="inline font-medium text-[var(--text)]">何时生效：</dt>
+              <dd className="inline">{item.effectiveWhen ?? "未公布"}</dd>
+            </div>
+          )}
         </dl>
       </button>
       {open ? (
@@ -863,7 +873,6 @@ function OverseasRow({ item }: { item: OverseasItem }) {
             ) : item.kind === "policy" ? (
               <>
                 <div><dt className="inline font-medium text-[var(--text)]">适用身份：</dt><dd className="inline">{item.identityLabel ?? item.whoApplies ?? "见原文"}</dd></div>
-                {item.decisionDateLabel ? <div><dd className="inline font-medium text-[var(--text)]">{item.decisionDateLabel}</dd></div> : null}
                 <div><dt className="inline font-medium text-[var(--text)]">状态：</dt><dd className="inline">{item.policyStatusLabel ?? (item.policyStatus === "enacted" ? "已生效" : item.policyStatus === "upcoming" ? "即将生效（尚未到生效日）" : item.policyStatus === "proposal" ? "提案/计划，尚未生效" : "未说明是提案还是已生效")}</dd></div>
                 <div><dt className="inline font-medium text-[var(--text)]">说明：</dt><dd className="inline">这是政府政策，不是招聘岗位，不能按「岗位可申请」理解。</dd></div>
               </>
