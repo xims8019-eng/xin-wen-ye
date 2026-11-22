@@ -1,1 +1,203 @@
-{"blockedDomainsCn": [{"host": "wfyi.org", "note": "条目保留页内中文摘要并标「中国境内打不开」，不给出打不开的原文按钮；有可访问的官方/替代链接时给替代链接。此名单只收用户在中国境内实测确认的域名，不靠境外抓取结果猜测。", "reason": "Amazon CloudFront 配置为屏蔽中国访问（用户 2026-11-21 在中国境内实测 403 确认）"}], "homepageDigest": {"note": "2026-11-22 新增、b 版改正顺序：首页改为每日速览。顺序为：江西专升本（第一栏固定，含 2028 四项状态）→ 近期可申请 → 国内外要闻 → 本周学习 → 海外升学 → 海外实习、工作与签证 → 综合热榜（首页底部默认折叠）。b 版之前两个海外栏插在国内外要闻之前，与简报不符，现已改正。每条先显示标题、来源、日期和一句「和我有什么关系」，详细条件点开在页内展开。", "recentlyApplicable": {"action": "getDailyDigest", "maxItems": 5, "rules": "跨「海外升学 / 海外实习、工作与签证 / 学习与实践」合并取最多 5 条：必须明确适用于用户（不是 bachelor_only、文本没写不适用于我）、有可用入口链接；海外条目须是岗位、或有明确申请截止日期、或来源确认专科可申请；学习条目须 needsApplication + 已确认 officialUrl + 截止日期未过。政策本身永远不算「岗位可申请」。排序：官方来源优先 > 有截止日期 > 最新发布。没有符合条件的就返回空，首页显示「暂无符合条件的新机会」"}, "order": ["江西专升本", "近期可申请", "国内外要闻", "本周学习", "海外升学", "海外实习、工作与签证", "综合热榜"]}, "jiangxi": {"cacheTtlMinutes": 60, "hiddenNoise": "2026-11-22 新增（isJiangxiHiddenNoise，入库时过滤）：(1) 培训机构营销——机构评测/测评、十大机构、哪家好、选机构、排行榜类标题；(2) 高考择校——面向高考生选大专/专科/高职的文章，含 gaokao.eol.cn 及一切 gaokao.* 域名。用户已是江西大二在读，这两类不进首页。成人高考/自考标题同样在入库时过滤（标题含普通高校专升本/普通专升本的除外）", "note": "江西省教育考试院官网唯一域名 www.jxeea.cn。official 只认条目自身链接域名为 jxeea.cn / .gov.cn / .edu.cn；媒体转载官方通知不算官方，标 repost「转载」。每条带 noticeKind 三分：formal2028（2028 届正式通知）/ reference（往年备考参考）/ unconfirmed（尚待确认的动态）；招生专业有正式对照依据时才标能否报考。2028 年四件事（报名通知/考试科目/专业对照表/招生简章）没有 2028 年条目覆盖时显示「待公布」。", "noticeKinds": ["formal2028（2028 届正式通知）", "reference（往年备考参考）", "unconfirmed（尚待确认的动态）"], "officialHosts": ["jxeea.cn", "*.gov.cn", "*.edu.cn"], "pending2028": ["报名", "考试科目", "专业对照", "招生简章"], "queries": ["江西专升本 招生 考试院", "江西省教育考试院 专升本", "江西 专升本 考试科目 专业对照", "江西 专升本 报名 招生简章"], "searchEngine": "Bing News RSS（bingNewsUrlAll，无时间窗，往年材料作备考参考保留）", "title": "江西专升本"}, "myWorld": {"cacheTtlMinutes": 60, "dailyPicks": 5, "note": "栏目名在五类结构里是「国内外观察与阅读」。同一事件按标题归一化键合并；每日精选最多 5 条、按主题轮转取；完整列表最多 40 条可按主题筛选。分类新闻（财经→经济、国际→政治、科技→科技）也并入候选池，且已在分类入库时解析为直达地址。八国名单只约束海外机会栏，不限制本栏的全球新闻覆盖。书籍/历史/语言学习是每周精选；具体语言课程和考试报名归学习栏。", "title": "国内外观察与阅读（原「我关注的世界」）", "topicSources": {"书籍/历史/语言学习": "每周精选，Bing 搜索", "出行安全": "Bing 搜索「出行安全 提醒 旅行安全」", "国内经济": "分类新闻「财经」+ Bing 搜索「中国 经济 数据 政策」", "地区冲突": "Bing 搜索「地区冲突 局势」", "政治": "分类新闻「国际」", "科技": "分类新闻「科技」", "经济": "分类新闻「财经」", "网络安全": "Bing 搜索「网络安全 漏洞 数据泄露」"}, "weeklyQueries": [{"q": "新书 出版 推荐 阅读", "topic": "书籍"}, {"q": "历史 新书 研究 考古", "topic": "历史"}, {"q": "英语学习 语言学习 方法", "topic": "语言学习"}]}, "note": "从 2026-11-22b 线上版 server/src/actions.ts 提取（JIANGXI_QUERIES、OVERSEAS_QUERIES、OVERSEAS_JOB_QUERIES、OVERSEAS_VISA_QUERIES、WORLD_DAILY_QUERIES、WORLD_WEEKLY_QUERIES、CURATED_VISA_ITEMS、CN_BLOCKED_DOMAINS、PINNED_VISA_BLOCKED_HOSTS），与当前线上版本一致。逻辑本体在 actions.ts 里，本文件是可读版清单。", "overseas": {"applicabilityBeforePinning": "2026-11-22 新增（isNotApplicableToUser）：适用性排在置顶规则之前——eligibility=bachelor_only，或条目自己的文本写明不适用于我/不含信息安全技术应用的，移出首页、永不置顶。因此人工条目里的新西兰毕业后工签、英国毕业生签证、韩国试点虽然仍在 CURATED_VISA_ITEMS 里，首页固定区实际只显示美国耶鲁 D/S、新加坡 MOM、日本语言学校 3 条", "cacheTtlMinutes": 60, "categories": {"note": "2026-11-22 五类结构：海外内容拆成两类，每条只归一个主类；岗位和政策分别标记，政策不标「岗位可申请」；政府工作许可/移民政策链接官方原文，带适用身份、生效日期和提案/已生效状态", "study": "海外升学（category=study）：在读可准备 / 专科毕业可申请 / 本科毕业可申请，展示专业匹配、语言要求、截止日期、学费、预计生活费和奖学金条件，金额保留原币并注明按年还是按整个项目", "work_visa": "海外实习、工作与签证（category=work_visa）：在读实习 / 专科毕业后从中国直接求职 / 海外留学期间及毕业后就业；优先信息安全、网络运维、IT 技术支持岗位；岗位卡写明地点、能否在中国境内远程、学历与经验要求、是否接受境外申请、雇主是否明确提供签证支持，未说明的如实标注"}, "eligibility": "eligibility 三态：diploma_eligible（原文明确接受专科）/ bachelor_only（只限本科）/ unclear（适用学历不明确，绝不标成专科可申请）；移民类条目带 identityLabel 标明适用身份", "jobQueries": ["信息安全 网络运维 IT技术支持 实习 招聘 海外", "cybersecurity internship international students apply", "IT support network engineer jobs visa sponsorship international applicants", "日本 韩国 新加坡 IT 工程师 招聘 外国人"], "pinnedVisaBlockedHosts": ["dayonekorea.com", "gistreel.com"], "pinnedVisaItems": [{"country": "美国", "effectiveWhen": "2026-11-16 裁决即恢复 D/S；国土安全部可能上诉，但上诉本身不恢复该规则", "eligibility": "diploma_eligible", "source": "耶鲁大学 OISS", "title": "Elimination of Duration of Status: Summary & FAQs（耶鲁大学 OISS）", "url": "https://oiss.yale.edu/immigration/elimination-of-duration-of-status-summary-faqs", "whatChanged": "法院整体推翻固定停留期规则，D/S（停留期限）保留（Presidents' Alliance v. DHS, No. 1:26-cv-13799-FDS）。2026-11-22 起，D/S 事件匹配器也识别「4-year cap / 固定期限 / 4 年上限」这类对 2025 年固定期限提案的说法，同事件旧闻（如 MSN 转载）并入本条、不再单独置顶"}, {"country": "新西兰", "effectiveWhen": "2026 年 11 月 23 日起生效（原定 11 月 16 日，因移民局微软故障推迟一周，修正指令 Amendment Circular 2026-36 确认）", "eligibility": "bachelor_only", "homepageVisible": false, "source": "新西兰移民局（Immigration New Zealand）", "title": "Post-Study Work Visa eligibility extended（新西兰移民局官方）", "url": "https://www.immigration.govt.nz/about-us/news-centre/post-study-work-visa-eligibility-extended-from-16-november-2026/", "whatChanged": "毕业后工作签证扩大到「7 级研究生文凭（新西兰全日制读完）+ 学士学位」的毕业生，最长 1 年；同日新设 6 个月短期毕业生工作签证。只限学士学位，2026-11-22 起按「适用性优先于置顶」移出首页"}, {"country": "英国", "effectiveWhen": "2027-01-01 起提交的申请按 18 个月；此前提交的仍为 2 年", "eligibility": "bachelor_only", "homepageVisible": false, "source": "萨福德大学（University of Salford）", "title": "Changes to Graduate visas from 1 January 2027（萨福德大学）", "url": "https://www.salford.ac.uk/askus/immigration-and-visas/changes-to-graduate-visas-from-1-january-2027", "whatChanged": "毕业生签证（Graduate visa）由 2 年缩短为 18 个月（本科/硕士），博士仍为 3 年；「高合规大学保留 2 年」只是预算提案。只限学位毕业生，2026-11-22 起按「适用性优先于置顶」移出首页"}, {"country": "新加坡", "effectiveWhen": "2027-01-01 起的新申请按新门槛；续签自 2028-01-01 起到期者适用", "eligibility": "unclear", "source": "新加坡人力部（MOM）", "title": "Factsheet on Foreign Workforce Policies（新加坡人力部官方文件）", "url": "https://www.mom.gov.sg/-/media/mom/documents/press-releases/2026/factsheet-on-foreign-workforce-policies-03032026.pdf-3", "whatChanged": "工作准证薪资门槛上调：EP 5,600→6,000 新元、S 准证 3,300→3,600 新元（金融业更高）；新加坡没有专门的毕业后工作签证"}, {"country": "日本", "effectiveWhen": "在留资格认定证明书：2026 年 10 月入学起的新申请适用；续签与在留资格变更：2026 年 7 月 1 日起的申请适用；签证签发费：2026 年 7 月 1 日起单次约 15,000 日元", "eligibility": "unclear", "source": "日本出入国在留管理厅", "title": "日本語教育機関に入学する者に係る運用の一部見直しについて（出入国在留管理厅）", "url": "https://www.moj.go.jp/isa/10_00258.html", "whatChanged": "语言学校留学生证明 A1 日语能力必须交认可考试证明（JLPT N5+/JFT-Basic A1+ 等）或由学校面试确认，150 小时学习记录不再单独够用；只针对语言学校"}, {"country": "韩国", "effectiveWhen": "2026 年 2 月 6 日公布，试点到 2027 年底", "eligibility": "unclear", "homepageVisible": false, "source": "Korea.net（韩国政府官方门户）", "title": "New tech depts. at 16 vocational schools to train int'l workers（韩国法务部试点）", "url": "https://www.korea.net/NewsFocus/Society/view?articleId=287072", "whatChanged": "法务部试点：16 所职业院校指定技术专业的 D-2 留学生，TOPIK 3+ 免资金证明、打工上限 30→35 小时/周、毕业对口就业可换 E-7-M（K-CORE）签证；16 个专业不含信息安全技术应用，条目自己写明不适用于页面主人，2026-11-22 起按「适用性优先于置顶」移出首页。2026 年 10 月的改革方案尚未生效，未收录"}], "pinnedVisaNote": "固定区规则：6 条人工核实条目（CURATED_VISA_ITEMS）在代码里永远占位，但首页展示先过适用性过滤（见 applicabilityBeforePinning），实际显示 3 条；搜索发现的签证类条目经模型判定 visa=true 后自动固定（存 overseas:visa:pinned:v6，同国家+同标题的新条目顶替旧条目，非人工条目发布满 365 天过期）；同一事件的转述在入库和合并两处都被丢弃（D/S 裁决、新西兰毕业后工签、英国毕业生签证缩短、日本语言学校新规、韩国试点各有专门匹配器）；dayonekorea.com 和 gistreel.com 被硬性禁止进入固定区（第三方解说/转述冒充官方原文的前科）。", "queries": ["中国大专 留学 申请 大学", "专科生 留学 奖学金 申请", "留学生 签证 政策 变化", "international students diploma admission university credit transfer", "student visa policy change international students", "New Zealand student visa international students policy", "Ireland UK student visa international students change", "Japan Korea Singapore student visa international students"], "sameEventDedupe": "2026-11-22 强化（sameOverseasEvent）：轮换列表按事件去重——标题归一化后完全相同即同事件（不限日期）；否则须同国家、共享一个 2 位以上显著数字、标题字符集相似度 ≥0.6、发布日期相差 7 天内。另有具名事件匹配器：印度–新西兰自贸协定（isIndiaNzFtaEventText，标题无显著数字也能识别，只留官方/最新一条）", "searchEngine": "Bing News RSS（bingNewsUrlAll），候选窗口 150 天", "searchWindowDays": 150, "stages": ["prepare（在读可准备）", "diploma（专科毕业可申请）", "bachelor（本科毕业可申请）", "intern（在读实习）", "direct（专科毕业后从中国直接求职）", "overseas_job（海外留学期间及毕业后就业）", "general"], "title": "海外升学 + 海外实习、工作与签证（原「中国专科生海外机会与政策变化」）", "visaQueries": ["美国 F-1 学生签证 政策 变化 OPT", "New Zealand student visa post-study work visa changes", "Singapore Student's Pass Employment Pass salary threshold international graduates", "越南 留学生 签证 政策 变化", "日本 留学签证 费用 在留 政策 变化", "韩国 留学生 签证 D-2 D-10 政策 变化", "Ireland student visa Third Level Graduate Scheme changes", "UK Graduate visa student visa changes 2027"]}}
+{
+  "blockedDomainsCn": [
+    {
+      "host": "wfyi.org",
+      "note": "条目保留页内中文摘要并标「中国境内打不开」，不给出打不开的原文按钮；有可访问的官方/替代链接时给替代链接。此名单只收用户在中国境内实测确认的域名，不靠境外抓取结果猜测。",
+      "reason": "Amazon CloudFront 配置为屏蔽中国访问（用户 2026-11-21 在中国境内实测 403 确认）"
+    }
+  ],
+  "homepageDigest": {
+    "note": "2026-11-22 新增、b 版改正顺序：首页改为每日速览。顺序为：江西专升本（第一栏固定，含 2028 四项状态）→ 近期可申请 → 国内外要闻 → 本周学习 → 海外升学 → 海外实习、工作与签证 → 综合热榜（首页底部默认折叠）。b 版之前两个海外栏插在国内外要闻之前，与简报不符，现已改正。每条先显示标题、来源、日期和一句「和我有什么关系」，详细条件点开在页内展开。",
+    "recentlyApplicable": {
+      "action": "getDailyDigest",
+      "maxItems": 5,
+      "rules": "跨「海外升学 / 海外实习、工作与签证 / 学习与实践」合并取最多 5 条：必须明确适用于用户（不是 bachelor_only、文本没写不适用于我）、有可用入口链接；海外条目须是岗位、或有明确申请截止日期、或来源确认专科可申请；学习条目须 needsApplication + 已确认 officialUrl + 截止日期未过。政策本身永远不算「岗位可申请」。排序：官方来源优先 > 有截止日期 > 最新发布。没有符合条件的就返回空，首页显示「暂无符合条件的新机会」"
+    },
+    "order": [
+      "江西专升本",
+      "近期可申请",
+      "国内外要闻",
+      "本周学习",
+      "海外升学",
+      "海外实习、工作与签证",
+      "综合热榜"
+    ]
+  },
+  "jiangxi": {
+    "cacheTtlMinutes": 60,
+    "hiddenNoise": "2026-11-22 新增（isJiangxiHiddenNoise，入库时过滤）：(1) 培训机构营销——机构评测/测评、十大机构、哪家好、选机构、排行榜类标题；(2) 高考择校——面向高考生选大专/专科/高职的文章，含 gaokao.eol.cn 及一切 gaokao.* 域名。用户已是江西大二在读，这两类不进首页。成人高考/自考标题同样在入库时过滤（标题含普通高校专升本/普通专升本的除外）",
+    "note": "江西省教育考试院官网唯一域名 www.jxeea.cn。official 只认条目自身链接域名为 jxeea.cn / .gov.cn / .edu.cn；媒体转载官方通知不算官方，标 repost「转载」。每条带 noticeKind 三分：formal2028（2028 届正式通知）/ reference（往年备考参考）/ unconfirmed（尚待确认的动态）；招生专业有正式对照依据时才标能否报考。2028 年四件事（报名通知/考试科目/专业对照表/招生简章）没有 2028 年条目覆盖时显示「待公布」。",
+    "noticeKinds": [
+      "formal2028（2028 届正式通知）",
+      "reference（往年备考参考）",
+      "unconfirmed（尚待确认的动态）"
+    ],
+    "officialHosts": [
+      "jxeea.cn",
+      "*.gov.cn",
+      "*.edu.cn"
+    ],
+    "pending2028": [
+      "报名",
+      "考试科目",
+      "专业对照",
+      "招生简章"
+    ],
+    "queries": [
+      "江西专升本 招生 考试院",
+      "江西省教育考试院 专升本",
+      "江西 专升本 考试科目 专业对照",
+      "江西 专升本 报名 招生简章"
+    ],
+    "searchEngine": "Bing News RSS（bingNewsUrlAll，无时间窗，往年材料作备考参考保留）",
+    "title": "江西专升本",
+    "endedExamReminder": "2026-11-22c 新增（isJiangxiEndedExamReminder）：考区/考点/考场/准考证/温馨提醒类条目，考试年份不是未来年份且发布已超过 45 天的，判为已结束的考务提醒，移出可见列表（相当于归入历史资料）；有长期备考价值的内容（考试科目/专业对照/招生方案/实施方案/招生简章/招生计划/报名流程/分数线）按构造豁免、保留。入库和每次 getJiangxi 返回时都执行。实测移出：腾讯网 2026-03-23《九江考区温馨提醒》（考试 2026-03-29）。"
+  },
+  "myWorld": {
+    "cacheTtlMinutes": 60,
+    "dailyPicks": 5,
+    "note": "栏目名在五类结构里是「国内外观察与阅读」。同一事件按标题归一化键合并；每日精选最多 5 条、按主题轮转取；完整列表最多 40 条可按主题筛选。分类新闻（财经→经济、国际→政治、科技→科技）也并入候选池，且已在分类入库时解析为直达地址。八国名单只约束海外机会栏，不限制本栏的全球新闻覆盖。书籍/历史/语言学习是每周精选；具体语言课程和考试报名归学习栏。",
+    "title": "国内外观察与阅读（原「我关注的世界」）",
+    "topicSources": {
+      "书籍/历史/语言学习": "每周精选，Bing 搜索",
+      "出行安全": "Bing 搜索「出行安全 提醒 旅行安全」",
+      "国内经济": "分类新闻「财经」+ Bing 搜索「中国 经济 数据 政策」",
+      "地区冲突": "Bing 搜索「地区冲突 局势」",
+      "政治": "分类新闻「国际」",
+      "科技": "分类新闻「科技」",
+      "经济": "分类新闻「财经」",
+      "网络安全": "Bing 搜索「网络安全 漏洞 数据泄露」"
+    },
+    "weeklyQueries": [
+      {
+        "q": "新书 出版 推荐 阅读",
+        "topic": "书籍"
+      },
+      {
+        "q": "历史 新书 研究 考古",
+        "topic": "历史"
+      },
+      {
+        "q": "英语学习 语言学习 方法",
+        "topic": "语言学习"
+      }
+    ],
+    "localFestivalTrafficFilter": "2026-11-22c 新增（isLocalFestivalTrafficNotice）：面向单一地方居民的地方节庆/假期交通出行提示（州庆/县庆/庙会/秋假/「@X 的小伙伴们」/本地居民信号 + 标题含交通/出行/管制/提示，或本身就是对本地人的交通提示），且文中不带相关范围（江西含各地市 / 全国 / 八个留学目的地）时，从观察栏池和每次 getMyWorld 返回中移除；没有提示性质的节庆新闻报道不受影响。实测移出：大理州庆交通提示；泰国水灯节等未被误伤。"
+  },
+  "note": "从 2026-11-22c 线上版 server/src/actions.ts 提取（JIANGXI_QUERIES、OVERSEAS_QUERIES、OVERSEAS_VISA_QUERIES、OVERSEAS_JOB_QUERIES、MYWORLD_*、CURATED_VISA_ITEMS 等常量与各过滤函数）。c 版新增三条首页选稿规则：海外「只讲单一外国国籍申请人」移出首页（isForeignApplicantsOnlyItem）、江西已结束考区提醒移出可见列表（isJiangxiEndedExamReminder）、观察栏地方节庆交通提示过滤（isLocalFestivalTrafficNotice），以及越南国籍/目的地辨析修正（foreignApplicantSignal 新分支）。",
+  "overseas": {
+    "applicabilityBeforePinning": "2026-11-22 新增（isNotApplicableToUser）：适用性排在置顶规则之前——eligibility=bachelor_only，或条目自己的文本写明不适用于我/不含信息安全技术应用的，移出首页、永不置顶。因此人工条目里的新西兰毕业后工签、英国毕业生签证、韩国试点虽然仍在 CURATED_VISA_ITEMS 里，首页固定区实际只显示美国耶鲁 D/S、新加坡 MOM、日本语言学校 3 条",
+    "cacheTtlMinutes": 60,
+    "categories": {
+      "note": "2026-11-22 五类结构：海外内容拆成两类，每条只归一个主类；岗位和政策分别标记，政策不标「岗位可申请」；政府工作许可/移民政策链接官方原文，带适用身份、生效日期和提案/已生效状态",
+      "study": "海外升学（category=study）：在读可准备 / 专科毕业可申请 / 本科毕业可申请，展示专业匹配、语言要求、截止日期、学费、预计生活费和奖学金条件，金额保留原币并注明按年还是按整个项目",
+      "work_visa": "海外实习、工作与签证（category=work_visa）：在读实习 / 专科毕业后从中国直接求职 / 海外留学期间及毕业后就业；优先信息安全、网络运维、IT 技术支持岗位；岗位卡写明地点、能否在中国境内远程、学历与经验要求、是否接受境外申请、雇主是否明确提供签证支持，未说明的如实标注"
+    },
+    "eligibility": "eligibility 三态：diploma_eligible（原文明确接受专科）/ bachelor_only（只限本科）/ unclear（适用学历不明确，绝不标成专科可申请）；移民类条目带 identityLabel 标明适用身份",
+    "jobQueries": [
+      "信息安全 网络运维 IT技术支持 实习 招聘 海外",
+      "cybersecurity internship international students apply",
+      "IT support network engineer jobs visa sponsorship international applicants",
+      "日本 韩国 新加坡 IT 工程师 招聘 外国人"
+    ],
+    "pinnedVisaBlockedHosts": [
+      "dayonekorea.com",
+      "gistreel.com"
+    ],
+    "pinnedVisaItems": [
+      {
+        "country": "美国",
+        "effectiveWhen": "2026-11-16 裁决即恢复 D/S；国土安全部可能上诉，但上诉本身不恢复该规则",
+        "eligibility": "diploma_eligible",
+        "source": "耶鲁大学 OISS",
+        "title": "Elimination of Duration of Status: Summary & FAQs（耶鲁大学 OISS）",
+        "url": "https://oiss.yale.edu/immigration/elimination-of-duration-of-status-summary-faqs",
+        "whatChanged": "法院整体推翻固定停留期规则，D/S（停留期限）保留（Presidents' Alliance v. DHS, No. 1:26-cv-13799-FDS）。2026-11-22 起，D/S 事件匹配器也识别「4-year cap / 固定期限 / 4 年上限」这类对 2025 年固定期限提案的说法，同事件旧闻（如 MSN 转载）并入本条、不再单独置顶"
+      },
+      {
+        "country": "新西兰",
+        "effectiveWhen": "2026 年 11 月 23 日起生效（原定 11 月 16 日，因移民局微软故障推迟一周，修正指令 Amendment Circular 2026-36 确认）",
+        "eligibility": "bachelor_only",
+        "homepageVisible": false,
+        "source": "新西兰移民局（Immigration New Zealand）",
+        "title": "Post-Study Work Visa eligibility extended（新西兰移民局官方）",
+        "url": "https://www.immigration.govt.nz/about-us/news-centre/post-study-work-visa-eligibility-extended-from-16-november-2026/",
+        "whatChanged": "毕业后工作签证扩大到「7 级研究生文凭（新西兰全日制读完）+ 学士学位」的毕业生，最长 1 年；同日新设 6 个月短期毕业生工作签证。只限学士学位，2026-11-22 起按「适用性优先于置顶」移出首页"
+      },
+      {
+        "country": "英国",
+        "effectiveWhen": "2027-01-01 起提交的申请按 18 个月；此前提交的仍为 2 年",
+        "eligibility": "bachelor_only",
+        "homepageVisible": false,
+        "source": "萨福德大学（University of Salford）",
+        "title": "Changes to Graduate visas from 1 January 2027（萨福德大学）",
+        "url": "https://www.salford.ac.uk/askus/immigration-and-visas/changes-to-graduate-visas-from-1-january-2027",
+        "whatChanged": "毕业生签证（Graduate visa）由 2 年缩短为 18 个月（本科/硕士），博士仍为 3 年；「高合规大学保留 2 年」只是预算提案。只限学位毕业生，2026-11-22 起按「适用性优先于置顶」移出首页"
+      },
+      {
+        "country": "新加坡",
+        "effectiveWhen": "2027-01-01 起的新申请按新门槛；续签自 2028-01-01 起到期者适用",
+        "eligibility": "unclear",
+        "source": "新加坡人力部（MOM）",
+        "title": "Factsheet on Foreign Workforce Policies（新加坡人力部官方文件）",
+        "url": "https://www.mom.gov.sg/-/media/mom/documents/press-releases/2026/factsheet-on-foreign-workforce-policies-03032026.pdf-3",
+        "whatChanged": "工作准证薪资门槛上调：EP 5,600→6,000 新元、S 准证 3,300→3,600 新元（金融业更高）；新加坡没有专门的毕业后工作签证"
+      },
+      {
+        "country": "日本",
+        "effectiveWhen": "在留资格认定证明书：2026 年 10 月入学起的新申请适用；续签与在留资格变更：2026 年 7 月 1 日起的申请适用；签证签发费：2026 年 7 月 1 日起单次约 15,000 日元",
+        "eligibility": "unclear",
+        "source": "日本出入国在留管理厅",
+        "title": "日本語教育機関に入学する者に係る運用の一部見直しについて（出入国在留管理厅）",
+        "url": "https://www.moj.go.jp/isa/10_00258.html",
+        "whatChanged": "语言学校留学生证明 A1 日语能力必须交认可考试证明（JLPT N5+/JFT-Basic A1+ 等）或由学校面试确认，150 小时学习记录不再单独够用；只针对语言学校"
+      },
+      {
+        "country": "韩国",
+        "effectiveWhen": "2026 年 2 月 6 日公布，试点到 2027 年底",
+        "eligibility": "unclear",
+        "homepageVisible": false,
+        "source": "Korea.net（韩国政府官方门户）",
+        "title": "New tech depts. at 16 vocational schools to train int'l workers（韩国法务部试点）",
+        "url": "https://www.korea.net/NewsFocus/Society/view?articleId=287072",
+        "whatChanged": "法务部试点：16 所职业院校指定技术专业的 D-2 留学生，TOPIK 3+ 免资金证明、打工上限 30→35 小时/周、毕业对口就业可换 E-7-M（K-CORE）签证；16 个专业不含信息安全技术应用，条目自己写明不适用于页面主人，2026-11-22 起按「适用性优先于置顶」移出首页。2026 年 10 月的改革方案尚未生效，未收录"
+      }
+    ],
+    "pinnedVisaNote": "固定区规则：6 条人工核实条目（CURATED_VISA_ITEMS）在代码里永远占位，但首页展示先过适用性过滤（见 applicabilityBeforePinning），实际显示 3 条；搜索发现的签证类条目经模型判定 visa=true 后自动固定（存 overseas:visa:pinned:v6，同国家+同标题的新条目顶替旧条目，非人工条目发布满 365 天过期）；同一事件的转述在入库和合并两处都被丢弃（D/S 裁决、新西兰毕业后工签、英国毕业生签证缩短、日本语言学校新规、韩国试点各有专门匹配器）；dayonekorea.com 和 gistreel.com 被硬性禁止进入固定区（第三方解说/转述冒充官方原文的前科）。",
+    "queries": [
+      "中国大专 留学 申请 大学",
+      "专科生 留学 奖学金 申请",
+      "留学生 签证 政策 变化",
+      "international students diploma admission university credit transfer",
+      "student visa policy change international students",
+      "New Zealand student visa international students policy",
+      "Ireland UK student visa international students change",
+      "Japan Korea Singapore student visa international students"
+    ],
+    "sameEventDedupe": "2026-11-22 强化（sameOverseasEvent）：轮换列表按事件去重——标题归一化后完全相同即同事件（不限日期）；否则须同国家、共享一个 2 位以上显著数字、标题字符集相似度 ≥0.6、发布日期相差 7 天内。另有具名事件匹配器：印度–新西兰自贸协定（isIndiaNzFtaEventText，标题无显著数字也能识别，只留官方/最新一条）",
+    "searchEngine": "Bing News RSS（bingNewsUrlAll），候选窗口 150 天",
+    "searchWindowDays": 150,
+    "stages": [
+      "prepare（在读可准备）",
+      "diploma（专科毕业可申请）",
+      "bachelor（本科毕业可申请）",
+      "intern（在读实习）",
+      "direct（专科毕业后从中国直接求职）",
+      "overseas_job（海外留学期间及毕业后就业）",
+      "general"
+    ],
+    "title": "海外升学 + 海外实习、工作与签证（原「中国专科生海外机会与政策变化」）",
+    "visaQueries": [
+      "美国 F-1 学生签证 政策 变化 OPT",
+      "New Zealand student visa post-study work visa changes",
+      "Singapore Student's Pass Employment Pass salary threshold international graduates",
+      "越南 留学生 签证 政策 变化",
+      "日本 留学签证 费用 在留 政策 变化",
+      "韩国 留学生 签证 D-2 D-10 政策 变化",
+      "Ireland student visa Third Level Graduate Scheme changes",
+      "UK Graduate visa student visa changes 2027"
+    ],
+    "foreignApplicantsOnly": "2026-11-22c 新增（isForeignApplicantsOnlyItem / isForeignApplicantsOnlyFields，信号函数 foreignApplicantSignal / chinaApplicantSignal / allApplicantsSignal）：主题只涉及单一外国国籍申请人的条目默认移出首页——除非它本身涉及中国申请人（中国须是申请人/留学生本人，仅作对比基线如「印度落后中国」不算），或写明适用于各国申请人的通用规则；整理后的 whoApplies 写明中国/各国申请人的永远保留。在入库（原始标题+摘要）、整理后、固定区合并、每次读回（overseasHomepageItems）四处都执行；只影响首页展示，分类归档数据不动；固定区三条（耶鲁/新加坡/日本）不受影响。具名事件合并 isNzIndiaVisaStatsEventText（新西兰+印度+学生签证+获批率/数据类措辞）并入 sameOverseasEvent：Moneycontrol 64.1% 与 Newspoint「印度落后中国」先并成一个事件，再被申请人规则整体移出。实测移出：Moneycontrol 64.1%、Newspoint、印度博士生 4 年工签（NIE/Edex）、爱尔兰拒签印度申请人、印度人新工签、Punch 尼日利亚求职指南。已知漏检：NDTV 的 MeitY 实习条目标题/摘要无确定性国籍信号，未被规则命中（如实记录）。",
+    "nationalityVsDestination": "2026-11-22c 补修（foreignApplicantSignal 新分支）：中文标题「X 国留学生 / X 国申请人」句式里 X 是申请人国籍（越南/柬埔寨/老挝/缅甸/蒙古/俄罗斯/乌克兰/斯里兰卡/哈萨克斯坦），仅当文中同时点名另一个国家为申请目的地（在|去|赴|前往|申请+国名，或国名+留学|签证|大学|学院）时才算外国申请人信号；越南作为目的地本身（去越南留学、越南学生签证新规、越南留学生活指南）不触发。中国教育在线《越南留学生如何在加拿大申请留学》即按此移出首页；斯坦福请愿、Bowdoin 招生页（各国申请人范围）保留。"
+  }
+}

@@ -1480,6 +1480,35 @@ function isJiangxiHiddenNoise(it: FeedItem): boolean {
   return false;
 }
 
+/**
+ * Ended exam-administration reminders (user rule, 2026-11-22): a 考区/
+ * 考点/考场 reminder, a 准考证 notice or a 温馨提醒 is written for ONE
+ * sitting of the exam and is published days before it. Once the piece
+ * itself is more than ~45 days old, that sitting is over and the item is
+ * history, not a live notice — it leaves the homepage's visible list
+ * (e.g. 腾讯网 2026-03-23 《江西省2026年普通高校专升本考试九江考区温馨提醒》,
+ * for the exam held 2026-03-29). Material with lasting 备考 value is
+ * never caught by this rule, however old: 考试科目、专业对照、招生方案/
+ * 实施方案、招生简章、报名流程、分数线 stay visible as 备考参考. A
+ * reminder naming a FUTURE exam year is for an upcoming sitting and
+ * stays. Deterministic: title shape + the title's exam year + the
+ * publish date decide.
+ */
+const JIANGXI_VALUABLE_RE = /考试科目|专业对照|招生方案|实施方案|招生简章|招生计划|报名流程|报名办法|报名指南|分数线|录取控制线/;
+const JIANGXI_EXAM_REMINDER_RE = /考区提醒|考点提醒|考点安排|考场安排|考场提醒|考前提醒|赴考提醒|温馨提醒|准考证/;
+
+function isJiangxiEndedExamReminder(title: string, publishedAt: string | null): boolean {
+  if (JIANGXI_VALUABLE_RE.test(title)) return false;
+  if (!JIANGXI_EXAM_REMINDER_RE.test(title)) return false;
+  if (!publishedAt) return false;
+  const pub = new Date(publishedAt).getTime();
+  if (Number.isNaN(pub)) return false;
+  const y = yearOf(title);
+  const curYear = Number(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date()).slice(0, 4));
+  if (y && Number(y.slice(0, 4)) > curYear) return false;
+  return Date.now() - pub > 45 * 24 * 3600 * 1000;
+}
+
 async function loadJiangxi(ctx: Ctx, force: boolean): Promise<{ items: JiangxiItem[]; asOf: string }> {
   if (!force) {
     const cached = await readCache<JiangxiItem[]>(ctx, "jiangxi:all:v4", JIANGXI_TTL_MS);
@@ -1512,6 +1541,10 @@ async function loadJiangxi(ctx: Ctx, force: boolean): Promise<{ items: JiangxiIt
       // Ended exam-administration reminders (a 准考证打印/考场提醒 whose exam
       // window has passed) are hidden by default — they cannot change a decision now.
       if (/(已结束|已经结束|报名已截止|考试已结束)/.test(it.title)) return false;
+      // Dated exam-day reminders whose sitting has passed （考区温馨提醒、
+      // 考点安排…) move to history; 考试科目/专业对照/招生方案 and the
+      // other lasting-value material are exempt inside the matcher.
+      if (isJiangxiEndedExamReminder(it.title, it.publishedAt)) return false;
       return true;
     })
     .sort((a, b) => {
@@ -1975,7 +2008,7 @@ const CURATED_VISA_ITEMS: OverseasItem[] = [
  */
 const PINNED_VISA_BLOCKED_HOSTS = ["dayonekorea.com", "gistreel.com"];
 
-const PINNED_VISA_KEY = "overseas:visa:pinned:v6";
+const PINNED_VISA_KEY = "overseas:visa:pinned:v7";
 /** Non-curated pinned visa items expire this long after their publish date. */
 const PINNED_VISA_MAX_AGE_MS = 365 * 24 * 3600 * 1000;
 
@@ -1995,6 +2028,150 @@ function isNotApplicableToUser(it: OverseasItem): boolean {
   if (it.eligibility === "bachelor_only") return true;
   const text = `${it.whoApplies ?? ""} ${it.whatChanged ?? ""} ${it.points.join(" ")}`;
   return /不适用于我|不适用于中国|不含信息安全|不适用于[^。]{0,12}专科/.test(text);
+}
+
+/**
+ * Homepage selection, applicability first (user rule, 2026-11-22, second
+ * pass): before anything else, an overseas item must either involve
+ * Chinese applicants or state a rule that applies to applicants of all
+ * countries. Reporting whose subject is ONE other nationality's
+ * applicants — Indian applicants' NZ approval-rate data, a work visa
+ * "for Indians", Indian PhD students' post-study rights, Ireland refusal
+ * figures for Indian applicants, a jobs guide for Nigerians — leaves the
+ * homepage by default, however often it is retold. This is homepage
+ * display only: nothing is deleted from the category archive, and the
+ * fixed visa zone is not exempt (it simply contains no such item today).
+ * Deterministic — title, the item's own applicability statement and its
+ * summary text decide; no model judgement is involved.
+ *
+ * A bare comparison mention does NOT count as involving Chinese
+ * applicants: "India lags behind China" uses China as the baseline of an
+ * Indian data story, so the piece still leaves. Chinese applicants count
+ * only when they are named as applicants/students themselves, and an
+ * all-applicant scope counts only when the text says so (international
+ * students / 各国申请人 / 不限国籍…).
+ */
+const FOREIGN_NATIONALITY_ADJ =
+  "Indian|Nigerian|Pakistani|Bangladeshi|Nepalese|Sri Lankan|Ghanaian|Kenyan|Filipino|Indonesian|Malaysian|Thai|Vietnamese";
+
+function foreignApplicantSignal(text: string): boolean {
+  // "Indian applicants", "Nigerian job seekers", "Indian PhD students"…
+  if (
+    new RegExp(
+      `\\b(${FOREIGN_NATIONALITY_ADJ})\\s+(students?|applicants?|nationals?|graduates?|Ph\\.?D|doctoral|workers?|job ?seekers?|professionals?|candidates?)`,
+      "i",
+    ).test(text)
+  )
+    return true;
+  // "for Indians", "How Nigerians can apply"…
+  if (/\b(Indians|Nigerians|Pakistanis|Bangladeshis|Nepalese|Ghanaians|Kenyans|Filipinos|Indonesians|Malaysians)\b/.test(text))
+    return true;
+  // The country itself as the applicant subject of a visa-statistics
+  // story: "New Zealand student visa: India lags behind China…".
+  if (
+    /\b(India|Nigeria|Pakistan|Bangladesh|Nepal|Ghana|Kenya)\b/.test(text) &&
+    /(student visa|visa approval|visa refusal|学生签证|获批率|拒签率)/i.test(text)
+  )
+    return true;
+  // Chinese headline shape "X国留学生 / X国申请人": X is the APPLICANT's
+  // nationality, NOT the destination — 《越南留学生如何在加拿大申请留学》
+  // is about Vietnamese applicants applying to Canada (a country this
+  // column does not even track); the earlier pass missed it because 越南
+  // is also a tracked destination and was read as one. The signal fires
+  // only when the text ALSO names a different country as the place being
+  // applied to (在加拿大申请 / 赴美留学 / 英国留学签证…): when the named
+  // country is itself the destination （去越南留学 / 越南学生签证新规 —
+  // Vietnam's own rules, open to applicants of any nationality) no other
+  // country is cast as where "X国留学生" are heading, so those pieces
+  // never match. This is also why 越南 stays out of the plain nationality
+  // branch below: there, "越南学生签证" names a destination's rules.
+  const natMatch = text.match(
+    /(越南|柬埔寨|老挝|缅甸|蒙古|俄罗斯|乌克兰|斯里兰卡|哈萨克斯坦)(留学生|申请人)/,
+  );
+  if (natMatch) {
+    const nat = natMatch[1];
+    const destNames =
+      "加拿大|美国|英国|新西兰|澳大利亚|澳洲|新加坡|日本|韩国|爱尔兰|越南|印度|泰国|马来西亚|菲律宾|印尼|印度尼西亚|尼日利亚|巴基斯坦|孟加拉|尼泊尔|中国";
+    const destRes = [
+      new RegExp(`(?:在|去|赴|前往|申请)(${destNames})`, "g"),
+      new RegExp(`(${destNames})(?:留学|签证|大学|学院)`, "g"),
+    ];
+    for (const re of destRes) {
+      for (const m of text.matchAll(re)) {
+        if (m[1] !== nat) return true;
+      }
+    }
+  }
+  // Chinese text: nationality + applicant noun （印度申请人/尼日利亚求职者…).
+  // 越南 is deliberately absent here: "越南学生签证" names Vietnam's own
+  // student-visa rules (a destination), not Vietnamese applicants abroad.
+  if (/(印度|尼日利亚|巴基斯坦|孟加拉|尼泊尔|加纳|肯尼亚|菲律宾|印尼|马来西亚|泰国)(申请人|留学生|学生|博士生|博士|公民|求职者|籍)/.test(text))
+    return true;
+  if (/(仅限|只面向|仅面向|只针对|专为).{0,10}(印度|尼日利亚|巴基斯坦|孟加拉|尼泊尔|加纳|肯尼亚|菲律宾)/.test(text)) return true;
+  return false;
+}
+
+/** Chinese applicants named as applicants/students themselves (a bare "China" used as a comparison baseline does not match). */
+function chinaApplicantSignal(text: string): boolean {
+  return (
+    /Chinese\s+(students?|applicants?|nationals?|graduates?|citizens?)/i.test(text) ||
+    /students?\s+from\s+China/i.test(text) ||
+    /中国(学生|申请人|留学生|公民|籍)/.test(text) ||
+    /华人(学生|留学生|申请)/.test(text) ||
+    /来自中国/.test(text)
+  );
+}
+
+/** The rule is stated for applicants of all countries, not one nationality. */
+function allApplicantsSignal(text: string): boolean {
+  return (
+    /international\s+students?/i.test(text) ||
+    /all\s+(international\s+)?(students|applicants|nationalities)/i.test(text) ||
+    /of\s+all\s+nationalities/i.test(text) ||
+    /foreign\s+students?/i.test(text) ||
+    /各国(申请人|学生|留学生)/.test(text) ||
+    /所有(国际)?(学生|申请人)/.test(text) ||
+    /国际学生/.test(text) ||
+    /不限国籍/.test(text)
+  );
+}
+
+/**
+ * True when an item is only about one foreign nationality's applicants.
+ * `applies` is the item's own applicability statement when one exists
+ * (enriched whoApplies): if IT names Chinese or all applicants, the item
+ * stays whatever the headline emphasises. Otherwise the headline decides
+ * first; a generic headline falls back to the whole text.
+ */
+function isForeignApplicantsOnlyFields(title: string, applies: string, body: string): boolean {
+  if (chinaApplicantSignal(applies) || allApplicantsSignal(applies)) return false;
+  if (foreignApplicantSignal(title) && !chinaApplicantSignal(title) && !allApplicantsSignal(title)) return true;
+  const all = `${title} ${applies} ${body}`;
+  return foreignApplicantSignal(all) && !chinaApplicantSignal(all) && !allApplicantsSignal(all);
+}
+
+function isForeignApplicantsOnlyItem(it: OverseasItem): boolean {
+  return isForeignApplicantsOnlyFields(it.title, it.whoApplies ?? "", `${it.whatChanged ?? ""} ${it.points.join(" ")}`);
+}
+
+/**
+ * Text-level matcher for the New Zealand student-visa statistics event
+ * (Nov 2026 release): one dataset — approval rates by nationality, with
+ * the Indian rate at 64.1% — retold by Moneycontrol ("approval rate for
+ * Indians falls to 64.1%"), Newspoint ("India lags behind China") and
+ * others. One event, one entry (user rule, 2026-11-22); the surviving
+ * entry is then subject to the foreign-applicant rule above, which takes
+ * the whole event off the homepage. The NZ Indian-PhD post-study story
+ * deliberately does NOT match (no student-visa statistics) — it is a
+ * different event, removed by the applicant rule on its own.
+ */
+function isNzIndiaVisaStatsEventText(text: string): boolean {
+  return (
+    /(new zealand|新西兰)/i.test(text) &&
+    /(india|indian|印度)/i.test(text) &&
+    /(student visa|学生签证)/i.test(text) &&
+    /(approval|获批|拒签|refusal|rate|数据|统计|lags?|falls?|declin|behind)/i.test(text)
+  );
 }
 
 /** Whole-title normalized key for exact-duplicate detection (titleKey() truncates to 14 chars for topic supersede; duplicates need the full title). */
@@ -2036,6 +2213,15 @@ function sameOverseasEvent(a: OverseasItem, b: OverseasItem): boolean {
     isIndiaNzFtaEventText(`${b.title} ${b.whatChanged ?? ""}`)
   )
     return true;
+  // The NZ student-visa statistics release (Indian approval rate 64.1%):
+  // Moneycontrol's number-led title and Newspoint's "India lags behind
+  // China" title share neither a distinctive number nor enough wording
+  // for the generic test below, but they are one dataset, one event.
+  if (
+    isNzIndiaVisaStatsEventText(`${a.title} ${a.whatChanged ?? ""}`) &&
+    isNzIndiaVisaStatsEventText(`${b.title} ${b.whatChanged ?? ""}`)
+  )
+    return true;
   if (a.country !== b.country) return false;
   const ka = fullTitleKey(a.title);
   const kb = fullTitleKey(b.title);
@@ -2074,6 +2260,9 @@ async function mergePinnedVisaItems(ctx: Ctx, discovered: OverseasItem[]): Promi
     // clearly does not apply to the user never enters — or stays in — the
     // fixed zone, curated items included.
     if (isNotApplicableToUser(it)) return false;
+    // Same homepage selection as the rotating list: a story only about
+    // one foreign nationality's applicants never pins either.
+    if (isForeignApplicantsOnlyItem(it)) return false;
     // Blocked hosts (third-party explainers, no official original) never pin.
     if (PINNED_VISA_BLOCKED_HOSTS.some((h) => it.url.includes(h) || (it.readUrl ?? "").includes(h))) return false;
     if (curatedUrls.has(it.url)) return true;
@@ -2382,10 +2571,21 @@ interface OverseasEnrichEntry {
   policyStatus: "enacted" | "proposal" | "unstated" | null;
 }
 
+/**
+ * Homepage selection for the overseas column, applied on EVERY read —
+ * including payloads cached before a rule existed — so a tightened rule
+ * takes effect on stored items immediately, not at the next refresh:
+ * not-applicable-to-the-user items and foreign-applicant-only stories
+ * never reach the homepage list.
+ */
+function overseasHomepageItems(items: OverseasItem[]): OverseasItem[] {
+  return items.filter((it) => !isNotApplicableToUser(it) && !isForeignApplicantsOnlyItem(it));
+}
+
 async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: OverseasItem[]; asOf: string }> {
   if (!force) {
-    const cached = await readCache<OverseasItem[]>(ctx, "overseas:all:v13", OVERSEAS_TTL_MS);
-    if (cached) return { items: cached.data, asOf: cached.asOf };
+    const cached = await readCache<OverseasItem[]>(ctx, "overseas:all:v14", OVERSEAS_TTL_MS);
+    if (cached) return { items: overseasHomepageItems(cached.data), asOf: cached.asOf };
   }
   const raw: FeedItem[] = [];
   await Promise.all(
@@ -2441,6 +2641,12 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
       // named by the user) is not decision-changing news — dropped here so
       // no refresh can bring it back.
       if (isStaleVisaOpinionItem(it)) return false;
+      // Homepage selection at ingest (user rule, 2026-11-22): a story only
+      // about one foreign nationality's applicants (Indian approval-rate
+      // data, visas "for Indians", a jobs guide for Nigerians) never
+      // enters the column — it neither involves Chinese applicants nor
+      // states a rule for applicants of all countries.
+      if (isForeignApplicantsOnlyFields(it.title, "", it.summary ?? "")) return false;
       return true;
     })
     .sort((a, b) => {
@@ -2452,11 +2658,11 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
 
   if (deduped.length === 0) {
     await noteRefreshFailure(ctx);
-    const stale = await readCacheStale<OverseasItem[]>(ctx, "overseas:all:v13");
-    if (stale) return { items: stale.data, asOf: stale.asOf };
+    const stale = await readCacheStale<OverseasItem[]>(ctx, "overseas:all:v14");
+    if (stale) return { items: overseasHomepageItems(stale.data), asOf: stale.asOf };
     // Even with no fresh search results, the fixed visa zone stands.
     const pinnedOnly = await mergePinnedVisaItems(ctx, []);
-    const asOf = await writeCache(ctx, "overseas:all:v13", pinnedOnly);
+    const asOf = await writeCache(ctx, "overseas:all:v14", pinnedOnly);
     return { items: pinnedOnly, asOf };
   }
 
@@ -2527,7 +2733,7 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
     try {
       const result = await completeInference(ctx, 
         `你在为一位中国专科（大专）学生（信息安全技术应用专业，预计 2028 年毕业）筛选「海外机会与政策变化」。只保留会改变他决策的消息：某校开始接受中国大专学历申请、学分认定/转学分变化、面向专科生的奖学金开放、学生签证要求调整、影响留学生的安全提醒。逐条判断：\n` +
-          `- keep：符合上面任一类才 true。留学中介广告、论坛帖子、泛泛的留学介绍、与专科生无关的普通新闻 keep=false。评论、观点、社论类文章（opinion/commentary/editorial）不是政策变化本身，哪怕评论的正是学生签证政策，keep=false。只面向其他国家或地区申请人（例如仅面向非洲申请人）、与中国学生无关的条目 keep=false。跟踪国家只有：美国、新西兰、新加坡、越南、日本、韩国、爱尔兰、英国；其他国家 keep=false。\n` +
+          `- keep：符合上面任一类才 true。留学中介广告、论坛帖子、泛泛的留学介绍、与专科生无关的普通新闻 keep=false。评论、观点、社论类文章（opinion/commentary/editorial）不是政策变化本身，哪怕评论的正是学生签证政策，keep=false。只面向其他国家或地区申请人（例如仅面向非洲申请人）、与中国学生无关的条目 keep=false。注意：标题里「X国留学生／X国申请人」的 X 是申请人国籍，不是留学目的地——例如《越南留学生如何在加拿大申请留学》讲的是越南籍申请人，目的地是加拿大，与中国申请人无关，keep=false；反过来讲去越南留学、越南学生签证规则的条目，越南是目的地，不要按申请人国籍误判。跟踪国家只有：美国、新西兰、新加坡、越南、日本、韩国、爱尔兰、英国；其他国家 keep=false。\n` +
           `- country：从这八个国家里选一个最贴切的中文名；实在判断不了填「其他」。\n` +
           `- whatChanged：一句中文说明变了什么，只能依据摘要已有信息；无摘要留空字符串，绝不根据标题猜。\n` +
           `- whoApplies：一句中文说明适用于谁，依据摘要写；摘要没写清就如实写「来源未写明适用人群」。\n` +
@@ -2664,8 +2870,12 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
   });
   // Applicability first (user rule, 2026-11-22): items that clearly do not
   // apply to the user leave the homepage entirely — not pinned, not in the
-  // rotating list, not behind the bachelor-only toggle.
-  const applicable = items.filter((it) => !isNotApplicableToUser(it));
+  // rotating list, not behind the bachelor-only toggle. Foreign-applicant-
+  // only stories (Indian visa statistics, Indian-PhD post-study rights…)
+  // leave the same way, judged on title + the enriched applicability
+  // fields, so an unenriched headline and an enriched one are held to the
+  // same deterministic rule.
+  const applicable = items.filter((it) => !isNotApplicableToUser(it) && !isForeignApplicantsOnlyItem(it));
   // One event, one entry — also across the rotating list: same-event
   // retellings collapse to one, preferring the official source, then the
   // newest version.
@@ -2709,7 +2919,7 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
     bounded[url] = e;
   }
   await writeCache(ctx, "overseas:enrich:v2", bounded);
-  const asOf = await writeCache(ctx, "overseas:all:v13", all);
+  const asOf = await writeCache(ctx, "overseas:all:v14", all);
   return { items: all, asOf };
 }
 
@@ -2739,6 +2949,33 @@ function titleKey(title: string): string {
   return title.replace(/[\s\p{P}]/gu, "").slice(0, 14);
 }
 
+/**
+ * Local festival / traffic notices (user rule, 2026-11-22): a travel or
+ * traffic advisory written for ONE locality's residents around a local
+ * festival or holiday — e.g. 搜狐 2026-11-21 《@大理的小伙伴们 州庆+秋假
+ * 将至 这份交通安全出行提示请收好！》 — leaves 国内外要闻 when that
+ * locality is neither 江西 nor one of his study destinations （美国、
+ * 新西兰、新加坡、越南、日本、韩国、爱尔兰、英国）. Nationwide notices,
+ * and travel-safety items about 江西 or a destination, stay. A festival
+ * NEWS report without an advisory (no 交通/出行提示 content) is not
+ * caught: the rule targets the advisory, not festival coverage.
+ * Deterministic: local-festival/local-address signals + a traffic or
+ * travel-advisory headline + the absence of any relevant scope.
+ */
+const WORLD_RELEVANT_SCOPE_RE = /江西|南昌|九江|赣州|宜春|上饶|吉安|抚州|景德镇|萍乡|新余|鹰潭|全国|美国|新西兰|新加坡|越南|日本|韩国|爱尔兰|英国/;
+const WORLD_LOCAL_FESTIVAL_RE = /州庆|县庆|市庆|区庆|庙会|泼水节|火把节|秋假|的小伙伴|本地(居民|市民|群众)|当地(居民|市民)/;
+const WORLD_TRAFFIC_ADVISORY_RE = /交通(安全|出行|管制|提示)|出行提示|出行安全|道路(交通)?(管制|封闭)|交通管制/;
+
+function isLocalFestivalTrafficNotice(it: { title: string; summary: string | null }): boolean {
+  const text = `${it.title} ${it.summary ?? ""}`;
+  if (WORLD_RELEVANT_SCOPE_RE.test(text)) return false;
+  // Local festival / holiday + a traffic or travel advisory in the headline.
+  if (WORLD_LOCAL_FESTIVAL_RE.test(text) && /交通|出行|管制|提示/.test(it.title)) return true;
+  // A traffic advisory explicitly addressed to one locality's own people.
+  if (WORLD_TRAFFIC_ADVISORY_RE.test(it.title) && /@|的小伙伴|本地|当地|辖区/.test(it.title)) return true;
+  return false;
+}
+
 async function loadMyWorld(ctx: Ctx, force: boolean): Promise<{ daily: WorldItem[]; weekly: WorldItem[]; all: WorldItem[]; asOf: string }> {
   if (!force) {
     const cached = await readCache<{ daily: WorldItem[]; weekly: WorldItem[]; all: WorldItem[] }>(ctx, "world:all:v2", WORLD_TTL_MS);
@@ -2747,6 +2984,9 @@ async function loadMyWorld(ctx: Ctx, force: boolean): Promise<{ daily: WorldItem
   const pool: WorldItem[] = [];
   const pushDedup = (items: FeedItem[], topic: string, weekly: boolean) => {
     for (const it of items) {
+      // Local festival/traffic advisories for an unrelated locality never
+      // enter the pool (see isLocalFestivalTrafficNotice).
+      if (isLocalFestivalTrafficNotice(it)) continue;
       const direct = decodeBingClick(it.url);
       if (isBingClick(direct)) continue;
       // No relay link is stored in this column either: category items now
@@ -3561,7 +3801,7 @@ export const Actions = {
 
   getJiangxi: defineAction({
     description:
-      "Returns the 江西专升本 column for a Jiangxi 专科 student （信息安全技术应用， 2028 年毕业）: official-first notices about 报名/考试科目/专业对照/招生简章， each with applicable year, relevance to the major and what to do. Training-institution marketing （机构评测/测评等） and 高考择校 content for gaokao students choosing a 专科 school are hidden at ingest — he is already a second-year student. Past-year items are flagged isReference （备考参考）; the pending list marks each 2028 matter as 待公布 until a 2028 notice covers it.",
+      "Returns the 江西专升本 column for a Jiangxi 专科 student （信息安全技术应用， 2028 年毕业）: official-first notices about 报名/考试科目/专业对照/招生简章， each with applicable year, relevance to the major and what to do. Training-institution marketing （机构评测/测评等） and 高考择校 content for gaokao students choosing a 专科 school are hidden at ingest — he is already a second-year student. Ended exam-administration reminders （考区/考点/考场提醒、准考证提示 whose sitting has passed, e.g. the 2026 九江考区温馨提醒） are moved to history — filtered at ingest AND on every read so cached payloads obey too — while lasting-value material （考试科目/专业对照/招生方案/实施方案/报名流程/分数线） stays visible. Past-year items are flagged isReference （备考参考）; the pending list marks each 2028 matter as 待公布 until a 2028 notice covers it.",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -3570,7 +3810,13 @@ export const Actions = {
       hasTodayUpdate: z.boolean(),
     }),
     async handler(ctx, args) {
-      const { items, asOf } = await loadJiangxi(ctx, args.force);
+      const loaded = await loadJiangxi(ctx, args.force);
+      const asOf = loaded.asOf;
+      // Read-time application of the ended-reminder rule, so a payload
+      // cached before the rule existed is filtered on every response too:
+      // ended 考区/考点/准考证 reminders leave the visible list, while
+      // 考试科目/专业对照/招生方案 material stays （备考参考）.
+      const items = loaded.items.filter((it) => !isJiangxiEndedExamReminder(it.title, it.publishedAt));
       const current = items.filter((it) => !it.isReference);
       const covers = (tag: JiangxiTag) => current.some((it) => it.tag === tag);
       const pending = [
@@ -3585,7 +3831,7 @@ export const Actions = {
 
   getOverseas: defineAction({
     description:
-      "Returns decision-changing overseas opportunities and policy changes for a Chinese 专科 (diploma) student across the US, New Zealand, Singapore, Vietnam, Japan, South Korea, Ireland and the UK: what changed, who it applies to and when it takes effect, with the original university/government link. Applicability is checked BEFORE pinning (2026-11-22): an item that clearly does not apply to the user — bachelor_only, or its own text says 不适用于我 / 不含信息安全技术应用 — is excluded from the column entirely, fixed visa zone included (so the zone now holds the Yale D/S ruling, Singapore MOM thresholds and the Japan language-school rule; the bachelor-only NZ/UK items and the Korea pilot are out). One event, one entry: exact duplicates (same title/source/day) and same-event retellings are merged, keeping the official/newest version. Student-visa and post-study-work-visa changes carry visa=true and live in a fixed zone (pinned=true): they persist across daily refreshes and are only removed when superseded by a newer item on the same topic, expired, or ruled not applicable. Unclear eligibility stays 'unclear' and is never presented as diploma-eligible. Immigration items carry an identityLabel.",
+      "Returns decision-changing overseas opportunities and policy changes for a Chinese 专科 (diploma) student across the US, New Zealand, Singapore, Vietnam, Japan, South Korea, Ireland and the UK: what changed, who it applies to and when it takes effect, with the original university/government link. Applicability is checked BEFORE pinning (2026-11-22): an item that clearly does not apply to the user — bachelor_only, or its own text says 不适用于我 / 不含信息安全技术应用 — is excluded from the column entirely, fixed visa zone included (so the zone now holds the Yale D/S ruling, Singapore MOM thresholds and the Japan language-school rule; the bachelor-only NZ/UK items and the Korea pilot are out). Homepage selection also requires the item to involve Chinese applicants or state a rule for applicants of all countries (2026-11-22): stories only about one foreign nationality's applicants (Indian NZ approval-rate data at 64.1%, Indian PhD post-study rights, visas 'for Indians', Ireland refusals of Indian applicants, a jobs guide for Nigerians) are excluded from the homepage list at ingest, after enrichment, in the pinned-zone merge and on every read of a cached payload — homepage display only, the category archive keeps its data. A bare comparison mention ('India lags behind China') does not count as involving Chinese applicants. In Chinese headlines of the shape 'X国留学生 / X国申请人', X is the applicants' nationality, not the destination (2026-11-22): 《越南留学生如何在加拿大申请留学》 is about Vietnamese applicants applying to Canada and leaves the homepage, while pieces treating Vietnam as the destination （去越南留学 / 越南学生签证规则） and all-applicant content (a Stanford graduate-union petition, a Bowdoin international-student admissions page) stay. One event, one entry: exact duplicates (same title/source/day) and same-event retellings are merged, keeping the official/newest version; the NZ student-visa statistics release is one named event, so its retellings collapse to a single entry before the applicant rule is applied. Student-visa and post-study-work-visa changes carry visa=true and live in a fixed zone (pinned=true): they persist across daily refreshes and are only removed when superseded by a newer item on the same topic, expired, or ruled not applicable. Unclear eligibility stays 'unclear' and is never presented as diploma-eligible. Immigration items carry an identityLabel.",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -3601,7 +3847,7 @@ export const Actions = {
 
   getMyWorld: defineAction({
     description:
-      "Returns 我关注的世界： daily picks (at most 5, same event merged, across 国内经济/国外经济/政治/科技/网络安全/出行安全/地区冲突）, weekly picks （书籍/历史/语言学习）, and the full topic-browsable list.",
+      "Returns 我关注的世界： daily picks (at most 5, same event merged, across 国内经济/国外经济/政治/科技/网络安全/出行安全/地区冲突）, weekly picks （书籍/历史/语言学习）, and the full topic-browsable list. Local festival/traffic advisories written for one unrelated locality's residents (e.g. 大理州庆交通安全出行提示） are excluded at ingest and on every read; nationwide notices and travel-safety items about 江西 or a study destination （美国/新西兰/新加坡/越南/日本/韩国/爱尔兰/英国） stay.",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -3611,11 +3857,15 @@ export const Actions = {
     }),
     async handler(ctx, args) {
       const r = await loadMyWorld(ctx, args.force);
+      // Read-time application of the local festival/traffic rule, so a
+      // payload cached before the rule existed is filtered on every
+      // response too (ingest applies the same rule to fresh pools).
+      const keep = (it: WorldItem) => !isLocalFestivalTrafficNotice(it);
       return {
         asOf: r.asOf,
-        daily: r.daily.map(normalizeWorld),
-        weekly: r.weekly.map(normalizeWorld),
-        all: r.all.map(normalizeWorld),
+        daily: r.daily.filter(keep).map(normalizeWorld),
+        weekly: r.weekly.filter(keep).map(normalizeWorld),
+        all: r.all.filter(keep).map(normalizeWorld),
       };
     },
   }),
