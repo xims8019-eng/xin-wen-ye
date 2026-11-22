@@ -1,6 +1,29 @@
-import { defineAction, z, type ActionsModule, type Ctx } from "@hatch/space-sdk";
+import { z } from "zod";
 import { asc, eq } from "drizzle-orm";
 import * as schema from "./schema";
+import type { Ctx } from "./ctx";
+import { completeInference } from "./llm";
+
+// ---------------------------------------------------------------------------
+// Local replacement for the SDK's `defineAction` (previously provided by
+// the Muse-hosted SDK). It returns the definition object as-is, keeping the
+// description/request/response/handler structure and type inference, so the
+// 16 action definitions below did not need to change.
+// ---------------------------------------------------------------------------
+
+function defineAction<Req extends z.ZodTypeAny, Res extends z.ZodTypeAny>(def: {
+  description: string;
+  request: Req;
+  response: Res;
+  handler: (ctx: Ctx, args: z.infer<Req>) => Promise<z.infer<Res>>;
+}): {
+  description: string;
+  request: Req;
+  response: Res;
+  handler: (ctx: Ctx, args: z.infer<Req>) => Promise<z.infer<Res>>;
+} {
+  return def;
+}
 
 // ---------------------------------------------------------------------------
 // Source definitions
@@ -468,7 +491,7 @@ const NEWS_TTL_MS = 45 * 60 * 1000;
 const FEED_TTL_MS = 60 * 60 * 1000;
 
 async function readCache<T>(ctx: Ctx, key: string, ttlMs: number): Promise<{ data: T; asOf: string } | null> {
-  const db = ctx.db<typeof schema>();
+  const db = ctx.db;
   const rows = await db.select().from(schema.cacheSnapshots).where(eq(schema.cacheSnapshots.key, key)).limit(1);
   const row = rows[0];
   if (!row) return null;
@@ -477,7 +500,7 @@ async function readCache<T>(ctx: Ctx, key: string, ttlMs: number): Promise<{ dat
 }
 
 async function readCacheStale<T>(ctx: Ctx, key: string): Promise<{ data: T; asOf: string } | null> {
-  const db = ctx.db<typeof schema>();
+  const db = ctx.db;
   const rows = await db.select().from(schema.cacheSnapshots).where(eq(schema.cacheSnapshots.key, key)).limit(1);
   const row = rows[0];
   if (!row) return null;
@@ -485,7 +508,7 @@ async function readCacheStale<T>(ctx: Ctx, key: string): Promise<{ data: T; asOf
 }
 
 async function writeCache(ctx: Ctx, key: string, data: unknown): Promise<string> {
-  const db = ctx.db<typeof schema>();
+  const db = ctx.db;
   const now = new Date();
   await db
     .insert(schema.cacheSnapshots)
@@ -500,7 +523,7 @@ async function writeCache(ctx: Ctx, key: string, data: unknown): Promise<string>
 /** Records the most recent refresh failure time (content itself stays on the previous version). */
 async function noteRefreshFailure(ctx: Ctx): Promise<void> {
   try {
-    const db = ctx.db<typeof schema>();
+    const db = ctx.db;
     const rows = await db.select().from(schema.cacheSnapshots).where(eq(schema.cacheSnapshots.key, "meta:status")).limit(1);
     const prev = rows[0] ? (JSON.parse(rows[0].payload) as { lastFailureAt?: string }) : {};
     await writeCache(ctx, "meta:status", { ...prev, lastFailureAt: new Date().toISOString() });
@@ -998,7 +1021,7 @@ async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: Learning
     if (enrichErrorRecorded) return;
     enrichErrorRecorded = true;
     try {
-      const db = ctx.db<typeof schema>();
+      const db = ctx.db;
       const rows = await db.select().from(schema.cacheSnapshots).where(eq(schema.cacheSnapshots.key, "meta:status")).limit(1);
       const prev = rows[0] ? (JSON.parse(rows[0].payload) as Record<string, unknown>) : {};
       await writeCache(ctx, "meta:status", {
@@ -1016,7 +1039,7 @@ async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: Learning
   // lost. 5 items per batch, and a failed batch retries once as two halves.
   const enrichBatch = async (batch: LearningCandidate[], offset: number): Promise<void> => {
     try {
-      const result = await ctx.inference.complete(enrichPrompt(batch, offset), {
+      const result = await completeInference(ctx, enrichPrompt(batch, offset), {
         schema: learningEnrichSchema,
         timeout_secs: 110,
       });
@@ -1363,7 +1386,7 @@ async function loadJiangxi(ctx: Ctx, force: boolean): Promise<{ items: JiangxiIt
       })
       .join("\n");
     try {
-      const result = await ctx.inference.complete(
+      const result = await completeInference(ctx, 
         `你在为一位江西大二专科生（专业：信息安全技术应用，预计 2028 年毕业、2028 年参加普通高校专升本）整理「江西专升本」栏目。逐条判断：\n` +
           `- keep：是否确为江西省普通高校专升本的通知/政策/招生信息。成人高考、自考、培训机构广告、机构测评软文 keep=false。\n` +
           `- tag：报名 / 考试科目 / 专业对照 / 招生简章 / 其他，按内容选最贴切的一个。\n` +
@@ -2150,7 +2173,7 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
     if (overseasEnrichErrorRecorded) return;
     overseasEnrichErrorRecorded = true;
     try {
-      const db = ctx.db<typeof schema>();
+      const db = ctx.db;
       const rows = await db.select().from(schema.cacheSnapshots).where(eq(schema.cacheSnapshots.key, "meta:status")).limit(1);
       const prev = rows[0] ? (JSON.parse(rows[0].payload) as Record<string, unknown>) : {};
       await writeCache(ctx, "meta:status", {
@@ -2170,7 +2193,7 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
       })
       .join("\n");
     try {
-      const result = await ctx.inference.complete(
+      const result = await completeInference(ctx, 
         `你在为一位中国专科（大专）学生（信息安全技术应用专业，预计 2028 年毕业）筛选「海外机会与政策变化」。只保留会改变他决策的消息：某校开始接受中国大专学历申请、学分认定/转学分变化、面向专科生的奖学金开放、学生签证要求调整、影响留学生的安全提醒。逐条判断：\n` +
           `- keep：符合上面任一类才 true。留学中介广告、论坛帖子、泛泛的留学介绍、与专科生无关的普通新闻 keep=false。评论、观点、社论类文章（opinion/commentary/editorial）不是政策变化本身，哪怕评论的正是学生签证政策，keep=false。只面向其他国家或地区申请人（例如仅面向非洲申请人）、与中国学生无关的条目 keep=false。跟踪国家只有：美国、新西兰、新加坡、越南、日本、韩国、爱尔兰、英国；其他国家 keep=false。\n` +
           `- country：从这八个国家里选一个最贴切的中文名；实在判断不了填「其他」。\n` +
@@ -2558,7 +2581,7 @@ export const Actions = {
       ),
     }),
     async handler(ctx) {
-      const db = ctx.db<typeof schema>();
+      const db = ctx.db;
       const subs = await db.select().from(schema.subscriptions).orderBy(asc(schema.subscriptions.id));
       const followedKeys = new Set(subs.map((s) => s.feedKey));
       return {
@@ -2577,7 +2600,7 @@ export const Actions = {
     async handler(ctx, args) {
       const feed = FEED_CATALOG.find((f) => f.key === args.key);
       if (!feed) throw new Error("目录里没有这个订阅源");
-      const db = ctx.db<typeof schema>();
+      const db = ctx.db;
       const existing = await db
         .select()
         .from(schema.subscriptions)
@@ -2616,7 +2639,7 @@ export const Actions = {
         throw new Error("这个地址暂时连不上，检查一下再试");
       }
       if (items.length === 0) throw new Error("这个地址不像一个 RSS/Atom 订阅源");
-      const db = ctx.db<typeof schema>();
+      const db = ctx.db;
       const feedKey = `custom:${args.url}`;
       const existing = await db
         .select()
@@ -2642,7 +2665,7 @@ export const Actions = {
     request: z.object({ id: z.number().int().positive() }),
     response: z.object({ ok: z.literal(true) }),
     async handler(ctx, args): Promise<{ ok: true }> {
-      const db = ctx.db<typeof schema>();
+      const db = ctx.db;
       await db.delete(schema.subscriptions).where(eq(schema.subscriptions.id, args.id));
       ctx.invalidateQueries();
       return { ok: true };
@@ -2661,7 +2684,7 @@ export const Actions = {
       refreshScheduleLabel: z.string(),
     }),
     async handler(ctx) {
-      const db = ctx.db<typeof schema>();
+      const db = ctx.db;
       const rows = await db.select().from(schema.cacheSnapshots);
       let max: Date | null = null;
       let lastFailureAt: string | null = null;
@@ -2703,7 +2726,7 @@ export const Actions = {
       asOf: z.string().nullable(),
     }),
     async handler(ctx, args) {
-      const db = ctx.db<typeof schema>();
+      const db = ctx.db;
       const subs = await db.select().from(schema.subscriptions).orderBy(asc(schema.subscriptions.id));
       if (subs.length === 0) return { items: [], feedErrors: [], followedCount: 0, asOf: null };
       const results = await Promise.all(
@@ -2751,7 +2774,7 @@ export const Actions = {
       ),
     }),
     async handler(ctx) {
-      const db = ctx.db<typeof schema>();
+      const db = ctx.db;
       const rows = await db.select().from(schema.bookmarks).orderBy(asc(schema.bookmarks.id));
       return {
         bookmarks: rows
@@ -2778,7 +2801,7 @@ export const Actions = {
     }),
     response: z.object({ saved: z.boolean() }),
     async handler(ctx, args) {
-      const db = ctx.db<typeof schema>();
+      const db = ctx.db;
       const existing = await db
         .select()
         .from(schema.bookmarks)
@@ -2898,7 +2921,7 @@ export const Actions = {
         base = { titleOnly: true, introZh: null, points: [] };
       } else {
         try {
-          const r = await ctx.inference.complete(
+          const r = await completeInference(ctx, 
             `下面是一条新闻的公开摘要。请只依据这段摘要本身整理中文要点，不要补充摘要里没有的信息，不要根据标题猜测正文：\n` +
               `- introZh：一句中文概括这段摘要讲了什么；摘要是英文的就翻译提炼。\n` +
               `- points：2-3 条中文要点，每条一句话，全部来自摘要原文。\n\n标题：${args.title}\n摘要：${summary.slice(0, 800)}`,
@@ -2997,7 +3020,7 @@ export const Actions = {
       await loadLearning(ctx, true);
       await Promise.all([loadJiangxi(ctx, true), loadOverseas(ctx, true), loadMyWorld(ctx, true)]);
       await Promise.all(CATEGORIES.map((cat) => loadCategory(ctx, cat.id, true)));
-      const db = ctx.db<typeof schema>();
+      const db = ctx.db;
       const subs = await db.select().from(schema.subscriptions);
       for (const s of subs) {
         await loadFeedItems(ctx, s.feedKey, s.name, s.url, true);
@@ -3006,4 +3029,4 @@ export const Actions = {
       return { ok: true, refreshedAt: new Date().toISOString() };
     },
   }),
-} satisfies ActionsModule;
+};

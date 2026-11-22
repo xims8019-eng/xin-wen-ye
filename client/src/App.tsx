@@ -1,10 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type ApiResponse } from "./api";
-import { actionFields } from "@hatch/space-sdk/fields" with { type: "macro" };
-import type { Actions } from "../../server/src/actions";
-
-const FIELDS = actionFields<typeof Actions>();
 
 type NewsItem = ApiResponse<typeof api, "getCategoryNews">["items"][number];
 type LearningItem = ApiResponse<typeof api, "getLearning">["items"][number];
@@ -275,30 +271,6 @@ function ArticleRow({ item }: { item: NewsItem }) {
       </div>
       {open ? <ItemDetail item={item} /> : null}
     </li>
-  );
-}
-
-function HeroStory({ item }: { item: NewsItem }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="border-b-2 border-[var(--text)] pb-4">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        aria-label={`${open ? "收起" : "展开"}：${item.title}`}
-        className="block w-full text-left"
-      >
-        <p className="text-xs font-semibold tracking-widest text-[var(--accent)]">今日头条</p>
-        <h2 className="font-headline mt-2 text-[26px] font-black leading-tight text-[var(--text)] lg:text-[30px]">{item.title}</h2>
-        <p className="mt-2 flex flex-wrap gap-x-1.5 text-xs text-[var(--dim)]">
-          <span className="font-medium text-[var(--text)]">{item.source}</span>
-          {item.publishedAt ? <span>· {formatPubTime(item.publishedAt)} · {relativeTime(item.publishedAt)}</span> : null}
-          <span className="text-[var(--accent)]">· {open ? "收起 ▴" : "展开看要点 ▾"}</span>
-        </p>
-      </button>
-      {open ? <ItemDetail item={item} /> : null}
-    </div>
   );
 }
 
@@ -1259,7 +1231,7 @@ function FeedsView() {
         </label>
         <input
           id="feed-name"
-          {...FIELDS.addCustomFeed.name}
+          name="name"
           value={feedName}
           onChange={(e) => setFeedName(e.target.value)}
           placeholder="比如：某博客"
@@ -1270,7 +1242,7 @@ function FeedsView() {
         </label>
         <input
           id="feed-url"
-          {...FIELDS.addCustomFeed.url}
+          name="url"
           value={feedUrl}
           onChange={(e) => setFeedUrl(e.target.value)}
           placeholder="https://example.com/feed.xml"

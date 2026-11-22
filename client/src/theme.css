@@ -58,6 +58,12 @@
   }
 }
 
+/* Standalone fallback (previously supplied by the hosting SDK): the app
+   root always fills at least the viewport height. */
+.hatch-space-root {
+  min-height: 100dvh;
+}
+
 .font-headline {
   font-family: var(--font-serifcn);
 }
