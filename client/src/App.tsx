@@ -765,10 +765,10 @@ function OverseasRow({ item }: { item: OverseasItem }) {
         </p>
         <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-[var(--dim)]">
           <span className="rounded-full border border-[var(--border)] px-2 py-0.5 font-medium text-[var(--text)]">{item.country}</span>
-          <span className="rounded-full border border-[var(--border)] px-2 py-0.5 font-medium text-[var(--text)]">{stageLabel(item)}</span>
+          <span className="rounded-full border border-[var(--border)] px-2 py-0.5 font-medium text-[var(--text)]">{item.cardTagLabel ?? stageLabel(item)}</span>
           {item.kind === "policy" ? (
             <span className="rounded-full bg-[var(--space-surface-alt)] px-2 py-0.5 font-medium text-[var(--text)]">
-              政策 · 非岗位{" · "}{item.policyStatusLabel ?? (item.policyStatus === "enacted" ? "已生效" : item.policyStatus === "upcoming" ? "即将生效" : item.policyStatus === "proposal" ? "提案/计划" : "生效状态未说明")}
+              {item.cardTagLabel ? "政策 · 非岗位" : <>政策 · 非岗位{" · "}{item.policyStatusLabel ?? (item.policyStatus === "enacted" ? "已生效" : item.policyStatus === "upcoming" ? "即将生效" : item.policyStatus === "proposal" ? "提案/计划" : "生效状态未说明")}</>}
             </span>
           ) : item.kind === "job" ? (
             <span className="rounded-full bg-[var(--accent)] px-2 py-0.5 font-medium text-white">岗位</span>
@@ -801,6 +801,7 @@ function OverseasRow({ item }: { item: OverseasItem }) {
         </p>
         <p className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-[var(--dim)]">
           <span>政策生效：{item.effectiveWhen ?? "未公布"}</span>
+          {item.decisionDateLabel ? <span className="font-medium text-[var(--text)]">{item.decisionDateLabel}</span> : null}
           {item.kind === "policy" ? null : <span>申请截止：{item.deadline ?? "未说明"}</span>}
         </p>
         <dl className="mt-1.5 space-y-0.5 text-sm leading-relaxed text-[var(--dim)]">
@@ -862,6 +863,7 @@ function OverseasRow({ item }: { item: OverseasItem }) {
             ) : item.kind === "policy" ? (
               <>
                 <div><dt className="inline font-medium text-[var(--text)]">适用身份：</dt><dd className="inline">{item.identityLabel ?? item.whoApplies ?? "见原文"}</dd></div>
+                {item.decisionDateLabel ? <div><dd className="inline font-medium text-[var(--text)]">{item.decisionDateLabel}</dd></div> : null}
                 <div><dt className="inline font-medium text-[var(--text)]">状态：</dt><dd className="inline">{item.policyStatusLabel ?? (item.policyStatus === "enacted" ? "已生效" : item.policyStatus === "upcoming" ? "即将生效（尚未到生效日）" : item.policyStatus === "proposal" ? "提案/计划，尚未生效" : "未说明是提案还是已生效")}</dd></div>
                 <div><dt className="inline font-medium text-[var(--text)]">说明：</dt><dd className="inline">这是政府政策，不是招聘岗位，不能按「岗位可申请」理解。</dd></div>
               </>
