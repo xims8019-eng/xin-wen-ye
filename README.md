@@ -71,3 +71,7 @@ bun run typecheck    # client + server 两个 tsconfig
 - 任何密钥 — 包里只有 `.env.example` 的变量名。
 
 同日 e 版补丁：学习栏「只限特定企业/机构员工或其子女」过滤补上英文单数形式——WCMA 奖学金存量文本写作 "Any employee or child of an employee …"，单数的 "child of an employee" 不命中 d 版的复数信号，自建版（无模型）因此漏过；e 版在同一分支新增 `/child(ren)? of (an?|the)? (employee|staff)/i` 与 `/employee(s)? or (a )?child of/i`，并用存量原文验过。
+
+同日 f 版补丁：学习栏三条残留过滤——（1）活动类标题（公开课/大咖课/讲座/论坛等）且正文写明「X月X日……举行/举办/召开」日期不晚于今天、无将来标记、无回放无报名时判为已办完的活动报道（东湖大咖公开课）；（2）正文出现专硕/学硕即按硕士学段处理（专硕住宿政策新闻）；（3）只限单一地方学区学生或仅限高中及以下学生的奖学金移出（St. Joseph 学区奖学金）。三条都是 isLearningNotActionable 的确定性分支，入库和每次读回都执行。
+
+同日 g 版补丁：学习栏两处补修——（1）已举办活动报道的日期窗口由 30 字放宽到 60 字：东湖大咖公开课的真实存量摘要「11月21日，由武汉市经济和信息化局主办、华中科技大学承办的"江城群星"年度大咖课举行」在「日」与「举行」之间隔了 35 字，f 版的 30 字窗口不命中、自建版漏过；g 版放宽到 60 字（仍限同一句），用真实文本重测确认旧窗口不命中、新窗口命中，防误伤用例仍保留。（2）高中生信号补两个英文写法：People《Deaf Student-Athlete Earns 10 College Scholarship Offers Following Successful High School Career》是美国高中橄榄球运动员的奖学金故事，文本只有 High School Football Career，f 版信号一个都没命中；g 版新增 high school football / high school athlete(s)，并用实存文本验过。连带效果：WTHR 的 INvestEd 奖学金（含 college juniors and seniors）命中既有信号一并移出——只限印第安纳州居民，移出正确。

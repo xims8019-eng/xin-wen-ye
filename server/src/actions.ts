@@ -28,7 +28,6 @@ function defineAction<Req extends z.ZodTypeAny, Res extends z.ZodTypeAny>(def: {
 // ---------------------------------------------------------------------------
 // Source definitions
 // ---------------------------------------------------------------------------
-
 const UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
 
@@ -829,6 +828,18 @@ interface EnrichEntry {
  * （子女）— the WCMA dairy-company scholarships are the named case), or
  * an intake month that is already past. When nothing
  * qualifies, the column is honestly empty rather than padded with news.
+ *
+ * 2026-11-22 follow-up (three more named cases, all deterministic):
+ * activity write-ups whose summary dates the event in the past
+ * ("X月X日……举行/举办/召开", no replay and no sign-up — the 东湖
+ * "江城群星" 大咖公开课 report); 专硕/学硕 wording, which is master's
+ * stage even though it never spells out 硕士 (the Sohu 专硕 dorm-policy
+ * news — also a pure policy report with nothing to join or learn);
+ * and scholarships/opportunities limited to one local school
+ * district's students or to high-school students only (the Yahoo /
+ * News-Press NOW St. Joseph item: "St. Joseph School District juniors
+ * and seniors can apply for a new scholarship…", high-school juniors
+ * and seniors earning college credit while still in high school).
  */
 function isLearningNotActionable(
   item: {
@@ -860,12 +871,55 @@ function isLearningNotActionable(
     !/(回放|回看)/.test(text)
   )
     return true;
+  // Activity write-ups whose own summary dates the event in the past
+  // (user, 2026-11-22 follow-up): an activity-type title （公开课/大咖课/
+  // 讲座/论坛…) whose summary/points say "X月X日……举行/举办/召开" for a
+  // date that is not in the future, with no replay and no sign-up entry
+  // anywhere in the text, is a report of an event that already happened.
+  // The named case is the Sohu 东湖 "江城群星" 大咖公开课 (held
+  // 2026-11-21, aimed at Wuhan entrepreneurs/executives): its title
+  // carries no finished-word and 公开课 even reads as an actionable
+  // signal, but the summary states it was held on 11月21日. A future
+  // marker （将于/即将/拟于/定于） before the date, a later date, or any
+  // 报名/回放/回看 in the text keeps the item — a lecture still
+  // enrolling or offering a replay is still actionable and stays.
+  // The gap between the date and the verb is allowed up to 60 chars
+  // (2026-11-22 follow-up): the 东湖 item's real stored summary reads
+  // "11月21日，由武汉市经济和信息化局主办、华中科技大学承办的"江城
+  // 群星"年度大咖课举行" — 35 chars of organiser + course name sit
+  // between 日 and 举行， so the original 30-char window returned null
+  // and the item survived. 60 covers that with headroom while still
+  // staying inside the same sentence (。 is excluded from the gap).
+  if (
+    /(公开课|大咖课|讲座|论坛|峰会|沙龙|分享会|研讨班|培训班)/.test(t) &&
+    !/(回放|回看|报名)/.test(text)
+  ) {
+    const held = /(\d{1,2})\s*月\s*(\d{1,2})\s*日[^。]{0,60}?(举行|举办|召开|开讲)/.exec(text);
+    if (held) {
+      const before = text.slice(Math.max(0, held.index - 12), held.index);
+      if (!/(将|拟|定于|即将)/.test(before)) {
+        const em = Number(held[1]);
+        const ed = Number(held[2]);
+        const tm = Number(todayStr.slice(5, 7));
+        const td = Number(todayStr.slice(8, 10));
+        if (em < tm || (em === tm && ed <= td)) return true;
+      }
+    }
+  }
   // Wrong school stage: primary / secondary school audiences.
   if (/中小学|中小学生|小学生|初中生|高中生|九年一贯制/.test(t)) return true;
   // Graduate admissions are not his stage either.
   if (/(博士|硕士)研究生招生|招收(博士|硕士)研究生/.test(t)) return true;
+  // 专硕 / 学硕 are the professional / academic MASTER's degrees — the
+  // same wrong stage as 硕士 even though the two characters never spell
+  // it out (user, 2026-11-22 follow-up; the named case is the Sohu
+  // report that many universities house no 专硕 students on campus —
+  // a pure policy story with nothing to sign up for or learn, which
+  // survived only because its title's 招生章程 read as an actionable
+  // signal and 专硕 never matched the 硕士 patterns above).
+  if (/(专硕|学硕)/.test(text)) return true;
   if (audienceStage && /小学|初中|中小学|高中/.test(audienceStage)) return true;
-  if (audienceStage && /(博士|硕士)/.test(audienceStage) && !/不限|专科|高职|大学生|本科/.test(audienceStage)) return true;
+  if (audienceStage && /(博士|硕士|专硕|学硕)/.test(audienceStage) && !/不限|专科|高职|大学生|本科/.test(audienceStage)) return true;
   // Internship postings live in category 3 （海外实习、工作与签证） — the
   // learning column links across to them instead of listing them here.
   if (/实习(生)?(招聘|岗位|招募|招收)|招聘实习生/.test(t)) return true;
@@ -895,6 +949,39 @@ function isLearningNotActionable(
     /employee(s)? or (a )?child of/i.test(text) ||
     /(只限|仅限|仅面向|只面向)[^。]{0,16}(员工|职工)/.test(text) ||
     /(员工|职工)(或其|及其)?的?(子女|孩子)/.test(text)
+  )
+    return true;
+  // Clearly not applicable to him: a scholarship / opportunity limited
+  // to one local school district's students, or to high-school (and
+  // below) students only (user, 2026-11-22 follow-up). The named case
+  // is the Yahoo / News-Press NOW item "New scholarship helps St.
+  // Joseph students earn college credit": its real summary reads "St.
+  // Joseph School District juniors and seniors can apply for a new
+  // scholarship that covers tuition for one Missouri Western State
+  // University course per semester" — high-school juniors/seniors of
+  // one Missouri school district, earning college credit while still
+  // in high school. Matched on the item's own title/summary/points in
+  // both languages: at ingest the raw English summary carries "school
+  // district" / "juniors and seniors" / "high school students"; the
+  // stored Chinese rendering carries 学区 / 高中生 / 高二·高三 signals.
+  // High-school athlete / football signals (2026-11-22 follow-up): the
+  // People item "Deaf Student-Athlete Earns 10 College Scholarship
+  // Offers Following Successful High School Career" carries none of the
+  // signals above — its stored text only says "High School Football
+  // Career" — yet it is a US high-school athlete's scholarship story,
+  // not something a Jiangxi 专科 student can use. "High School
+  // Football" / "high school athlete" wording is treated the same way:
+  // high-school stage, out of the learning column.
+  if (
+    /juniors and seniors/i.test(text) ||
+    /high school students/i.test(text) ||
+    /\bstill in high school\b/i.test(text) ||
+    /\bhigh school football\b/i.test(text) ||
+    /\bhigh school athletes?\b/i.test(text) ||
+    /\bschool district\b/i.test(text) ||
+    /学区[^。]{0,20}(奖学金|申请|学生|高中生)/.test(text) ||
+    /(面向|适合|仅限|只限|针对)[^。]{0,14}(高中生|中学生|初中生|小学生)/.test(text) ||
+    /(高二|高三)(学生|年级|的同学)/.test(text)
   )
     return true;
   // Expired intake: the stated 入学/开学/开课 month is already past, even
@@ -3805,7 +3892,7 @@ export const Actions = {
 
   getLearning: defineAction({
     description:
-      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生）, pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships) and expired intakes are all filtered out, so the list may honestly be empty. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip.",
+      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生）, pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships), activity write-ups whose summary dates the event in the past (\"X月X日……举行/举办/召开\" with no replay and no sign-up, e.g. the 东湖大咖公开课 report), 专硕/学硕 master's-stage items (e.g. the 专硕 dorm-policy news), scholarships limited to one local school district's students or to high-school students only (school district / juniors and seniors / high school football / high school athlete / 学区 / 高中生， e.g. the St. Joseph scholarship and the People high-school athlete scholarship story) and expired intakes are all filtered out, so the list may honestly be empty. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip.",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -4143,4 +4230,4 @@ export const Actions = {
       return { ok: true, refreshedAt: new Date().toISOString() };
     },
   }),
-};
+}
