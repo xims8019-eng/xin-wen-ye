@@ -1,8 +1,0 @@
-{
-  "runtime": "typescript",
-  "platformVersion": 29,
-  "entry": "client/dist/index.html",
-  "name": "新闻页",
-  "slug": "xin-wen-ye",
-  "managedCronJobs": ["xin-wen-ye-daily-refresh"]
-}
