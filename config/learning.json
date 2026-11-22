@@ -95,9 +95,9 @@
       "query": "scholarship application students university"
     }
   ],
-  "note": "从 2026-11-22c 线上版 server/src/actions.ts 的 LEARNING_FEEDS 及 getLearning 规则提取。搜索类源的完整 URL 由代码里的 bingNewsUrl() 拼出：https://www.bing.com/news/search?q=<urlencoded-query>&format=rss&qft=interval%3d%228%22（过去一个月）。",
+  "note": "从 2026-11-22d 线上版 server/src/actions.ts 的 LEARNING_FEEDS 及 getLearning 规则提取。搜索类源的完整 URL 由代码里的 bingNewsUrl() 拼出：https://www.bing.com/news/search?q=<urlencoded-query>&format=rss&qft=interval%3d%228%22（过去一个月）。",
   "rules": {
-    "actionableOnlyGate": "2026-11-22 新增并在同日收紧到全量列表，b 版补上裸词判定：getLearning 返回前对每条重新套用 isLearningNotActionable（代码规则 + 已存的模型 keep 判定）——截止已过、已结束且无回放/无开放报名的活动报道（研讨会，以及收官/落幕/闭幕——含裸词形式如「零碳大赛宁德收官」——和赛报/获奖/一等奖类结果报道，如「广西信息素养挑战赛赛报」；赛报只认行首/栏目词位置以免误伤竞赛报名；带回放/回看的保留）、面向中小学或博士/硕士研究生学段、纯新闻/论坛/行业动态、只面向其他国家本国学生/居民的机会、入学时间已过的招生，全部不出现在学习列表里；首页「本周学习」和「近期可申请」同样受此约束。筛完可以很少，不拿新闻凑数",
+    "actionableOnlyGate": "2026-11-22 新增并在同日收紧到全量列表，b 版补上裸词判定：getLearning 返回前对每条重新套用 isLearningNotActionable（代码规则 + 已存的模型 keep 判定）——截止已过、已结束且无回放/无开放报名的活动报道（研讨会，以及收官/落幕/闭幕——含裸词形式如「零碳大赛宁德收官」——和赛报/获奖/一等奖类结果报道，如「广西信息素养挑战赛赛报」；赛报只认行首/栏目词位置以免误伤竞赛报名；带回放/回看的保留）、面向中小学或博士/硕士研究生学段、纯新闻/论坛/行业动态、只面向其他国家本国学生/居民的机会、只限某一特定企业/机构员工或其子女的机会（d 版新增，见 employerOnlyOffers）、入学时间已过的招生，全部不出现在学习列表里；首页「本周学习」和「近期可申请」同样受此约束。筛完可以很少，不拿新闻凑数",
     "applicationItems": "needsApplication=true 时才显示 audienceStage（适用学段）和 deadline（截止日期 YYYY-MM-DD），且仅当标题或摘要明确写出时才填，否则为 null；费用 fee 同理，未写明显示「未公布」",
     "cacheTtlMinutes": 45,
     "deadlineReminder": "deadline 在今天（Asia/Shanghai）到未来 30 天内的条目进入快截止提醒，按截止日期从近到远排；已过期的直接被 actionableOnlyGate 滤掉，不再只是标「已截止」",
@@ -107,6 +107,7 @@
     "perItem": "一句中文说清适合谁、能学到什么（summaryZh）；无真实摘要时 summaryZh=null 并标注 titleOnly=true，不根据标题猜正文",
     "relayLinks": "入库前解析：Bing 点击链接在解析时解出发布方直达地址；Google 新闻中转链接走 batchexecute 解码，解不出的条目直接丢弃、不入库；MSN 转载解析到原发布方地址，解不出的丢弃",
     "searchWindowDays": 45,
-    "sort": "publishedAt desc（最新发布的排在前面），候选上限 40 条"
+    "sort": "publishedAt desc（最新发布的排在前面），候选上限 40 条",
+    "employerOnlyOffers": "2026-11-22d 新增（isLearningNotActionable 新分支，学习整理提示词同步）：只限某一特定雇主/机构的员工或其子女申请的机会移出学习列表——英文信号 only for employees / children of employees / employee's children，中文信号「只限/仅限/仅面向/只面向…员工/职工」「员工/职工（或其/及其）子女/孩子」。具名案例：WCMA（威斯康星奶酪制造商协会）奖学金，每份 5,000 美元、只限 WCMA 会员乳制品企业员工的子女，页面主人既非该企业员工也非员工子女，无法申请（WSAU 2026-11-19 报道）。代码规则在 getLearning 每次读回时执行，模型提示词里也写明同类机会 keep=false，双重过滤。"
   }
 }

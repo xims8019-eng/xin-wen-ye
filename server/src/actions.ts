@@ -824,7 +824,10 @@ interface EnrichEntry {
  * 研究生 admissions (he is a 专科 student); pure news reports and
  * industry forums; and items that clearly do not apply to him — open
  * only to one foreign country's students/residents （只限巴基斯坦、只限
- * 马来西亚…), or an intake month that is already past. When nothing
+ * 马来西亚…), to one specific employer's / organisation's employees or
+ * their children (only for employees / employees' children / 只限…员工
+ * （子女）— the WCMA dairy-company scholarships are the named case), or
+ * an intake month that is already past. When nothing
  * qualifies, the column is honestly empty rather than padded with news.
  */
 function isLearningNotActionable(
@@ -877,6 +880,18 @@ function isLearningNotActionable(
   )
     return true;
   if (/不适用于(我|中国)|仅限[^。]{0,10}(公民|居民|学生)(申请|参加)?/.test(text)) return true;
+  // Clearly not applicable to him: the offer is restricted to one specific
+  // employer's / organisation's employees or their children (the WCMA
+  // dairy-company employees' children scholarships, WSAU 2026-11-19 — he
+  // is neither an employee of a WCMA member company nor an employee's
+  // child there, so he cannot apply). Same treatment as the
+  // single-foreign-country offers above (user rule, 2026-11-22).
+  if (
+    /only for (the )?employees|children of employees|employ\w+('s|s')? children/i.test(text) ||
+    /(只限|仅限|仅面向|只面向)[^。]{0,16}(员工|职工)/.test(text) ||
+    /(员工|职工)(或其|及其)?的?(子女|孩子)/.test(text)
+  )
+    return true;
   // Expired intake: the stated 入学/开学/开课 month is already past, even
   // when no formal deadline field was extracted (the Malaysia scholarship
   // was for a 2026 年 4 月 intake).
@@ -1102,7 +1117,7 @@ async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: Learning
       .join("\n");
     return (
       `你在为学生整理一个「学习」资讯栏目。下面是抓到的候选条目（带编号）。请逐条判断并整理：\n` +
-      `- keep：是否真的对学生学习有用（课程/讲座、学习资源、或可报名的竞赛/暑期学校/奖学金等机会）。教材出版、学习工具、教育资源类资讯，只要对学生或教师的学习有实际参考价值，也 keep=true。纯娱乐、明星八卦、招生广告软文、培训机构广告、与学习无关的新闻，keep=false。已经结束的活动报道（如已召开的研讨会、论坛回顾、获奖名单、大赛收官/落幕/闭幕的报道、赛报和获奖喜报——除非明确提供回放/回看），以及只面向中小学生或博士/硕士研究生的内容，对一位专科在读生没有可行动价值，keep=false。纯新闻报道（时事评论、行业动态、企业产品或合作消息、大学项目介绍）即使与教育有关也不是能参加的学习内容，keep=false；面向行业从业者的论坛、峰会，keep=false；只面向某个外国国家本国学生/居民的机会（如仅限巴基斯坦、马来西亚学生），以及入学时间已经过去的招生，keep=false。本栏只留他现在还能报名、能看回放或能直接开始学的内容，宁缺毋滥。\n` +
+      `- keep：是否真的对学生学习有用（课程/讲座、学习资源、或可报名的竞赛/暑期学校/奖学金等机会）。教材出版、学习工具、教育资源类资讯，只要对学生或教师的学习有实际参考价值，也 keep=true。纯娱乐、明星八卦、招生广告软文、培训机构广告、与学习无关的新闻，keep=false。已经结束的活动报道（如已召开的研讨会、论坛回顾、获奖名单、大赛收官/落幕/闭幕的报道、赛报和获奖喜报——除非明确提供回放/回看），以及只面向中小学生或博士/硕士研究生的内容，对一位专科在读生没有可行动价值，keep=false。纯新闻报道（时事评论、行业动态、企业产品或合作消息、大学项目介绍）即使与教育有关也不是能参加的学习内容，keep=false；面向行业从业者的论坛、峰会，keep=false；只面向某个外国国家本国学生/居民的机会（如仅限巴基斯坦、马来西亚学生），只限某一特定企业/机构员工或其子女的机会（如仅限乳制品企业员工子女的 WCMA 奖学金），以及入学时间已经过去的招生，keep=false。本栏只留他现在还能报名、能看回放或能直接开始学的内容，宁缺毋滥。\n` +
       `- category：courses（课程与讲座）/ resources（学习资源）/ opportunities（学生机会），以内容为准，可修正类别提示。\n` +
       `- summaryZh：用一句中文说清「适合谁、能学到什么」。只能依据摘要里已有的信息写（摘要是英文的就翻译提炼），不要编造课程内容、机构承诺或数字。条目标注「无摘要，仅有标题」时，summaryZh 必须留空字符串——绝不根据标题猜测正文。\n` +
       `- pointsZh：2-3 条中文要点，逐条只能来自摘要原文的信息（英文摘要翻译成中文）；无摘要的条目留空数组。\n` +
@@ -1814,6 +1829,69 @@ const NZ_PSWV_ITEM: OverseasItem = {
 };
 
 /**
+ * Curated, verified item (2026-11-22, added at the user's request as a
+ * FUTURE PATH): New Zealand's new Short-term Graduate Work Visa — a
+ * 6-month open work visa for graduates who completed an NZQCF Level 5–7
+ * qualification full-time in New Zealand (at least 24 weeks, excluding
+ * English-language, foundation and bridging courses) and do NOT qualify
+ * for the Post-Study Work Visa. At least NZ$5,000 in funds; apply within
+ * 3 months of the NZ student visa expiring; the applicant must not have
+ * previously held a Short-term or Post-Study Work Visa; granted once
+ * only, cannot be extended. This is a DIFFERENT visa from the PSWV
+ * expansion carried by NZ_PSWV_ITEM (Level 7 Graduate Diploma + a
+ * bachelor's degree) — the two must not be conflated.
+ * Effective date: 2026-11-23 per Amendment Circular 2026-36 (the INZ
+ * landing page still says 16 November — the pre-delay date, before the
+ * Microsoft-outage postponement). Source is Immigration New Zealand's own
+ * announcement page, URL supplied verified in the user's brief.
+ * Applicability, stated plainly in the item: the user cannot use this
+ * now — his Jiangxi 大专 studied in China does not itself qualify, and
+ * INZ does not state how a Chinese 大专 maps to NZQCF levels; the route
+ * only becomes usable after completing a Level 5–7 qualification in New
+ * Zealand. It is labelled 「未来路径」, never presented as currently
+ * applicable. Eligibility stays 'unclear' (not bachelor_only — no degree
+ * is required — and not diploma_eligible, since his current diploma does
+ * not qualify him today). As a hand-verified curated pin it is exempt
+ * from the rotating list's foreign-applicant filter, like the Yale /
+ * Singapore / Japan pins (see mergePinnedVisaItems); the applicability
+ * rule still governs it, and its wording deliberately avoids the
+ * not-applicable phrasings that rule keys on because it IS a path open
+ * to him later, unlike the bachelor-only items.
+ */
+const NZ_SGWV_ITEM: OverseasItem = {
+  title: "Short-term Graduate Work Visa（新西兰短期毕业工签 · 未来路径）",
+  url: "https://www.immigration.govt.nz/about-us/news-centre/new-and-updated-post-study-work-visa-options/",
+  source: "新西兰移民局（Immigration New Zealand）",
+  publishedAt: null,
+  country: "新西兰",
+  whatChanged:
+    "新西兰自 2026 年 11 月 23 日起新设短期毕业工签（Short-term Graduate Work Visa）：在新西兰全日制读满至少 24 周、取得 NZQCF 5–7 级学历（不含语言、预科、桥梁课程）、且不符合毕业后工签（PSWV）申请条件的人，可获 6 个月开放工作签证，只批一次、不能续签；申请时须有至少 5,000 新元资金，并在新西兰学生签证到期后 3 个月内提交，此前不能持有过短期毕业工签或毕业后工签。生效日以修正指令 Amendment Circular 2026-36 为准——移民局落地页仍写 11 月 16 日，那是因微软故障推迟前的旧日期。这条与同日生效的 PSWV 扩大是两条不同的签证：PSWV 扩大针对 7 级研究生文凭另加学士学位者，本条针对够不上 PSWV 的 5–7 级毕业生。",
+  whoApplies:
+    "未来路径，我现在还申请不了：适用对象是以后在新西兰全日制读完 NZQCF 5–7 级学历的毕业生；我在江西读的大专本身不算，中国大专对应新西兰哪一级移民局没有写明——只有先去新西兰读完一个 5–7 级学历，这条才用得上",
+  effectiveWhen: "2026 年 11 月 23 日起（修正指令 Amendment Circular 2026-36 确认；移民局落地页上的 11 月 16 日是推迟前的旧日期）",
+  eligibility: "unclear",
+  isImmigration: false,
+  identityLabel: "未来路径：在新西兰完成 5–7 级学历后的毕业生（学生签证转工签）",
+  points: [
+    "条件：在新西兰全日制读满至少 24 周并取得 NZQCF 5–7 级学历；语言课程、预科和桥梁课程不算。",
+    "只给不符合毕业后工签（PSWV）申请条件的人；之前拿过短期毕业工签或毕业后工签的不能再申请。",
+    "资金至少 5,000 新元；须在新西兰学生签证到期后 3 个月内申请；一生只批一次，6 个月开放工签，可为任何雇主工作，不能续签。",
+    "这不是 PSWV 扩大：PSWV 扩大要求 7 级研究生文凭另加学士学位；本条是给 5–7 级、够不上 PSWV 的毕业生留的另一条路。",
+    "对我而言是未来路径：江西的大专学历本身不算，中国大专对应 NZQCF 哪一级移民局没有写明；先去新西兰读完 5–7 级学历后才谈得上。",
+    "本条链接即新西兰移民局官网原文；页面上的 11 月 16 日是旧日期，生效日以修正指令 Amendment Circular 2026-36 的 11 月 23 日为准。",
+  ],
+  titleOnly: false,
+  readUrl: "https://www.immigration.govt.nz/about-us/news-centre/new-and-updated-post-study-work-visa-options/",
+  needsLogin: false,
+  blockedReason: null,
+  official: true,
+  visa: true,
+  pinned: true,
+  kind: "policy",
+  policyStatus: "enacted",
+};
+
+/**
  * Curated, verified item (2026-11-21): the UK Graduate visa shortens from
  * 2 years to 18 months for applications made on or after 2027-01-01
  * (bachelor's/master's graduates; PhD stays 3 years). Confirmed in the
@@ -1987,11 +2065,15 @@ const KR_TECH_PILOT_ITEM: OverseasItem = {
 const CURATED_VISA_ITEMS: OverseasItem[] = [
   DS_RULING_ITEM,
   NZ_PSWV_ITEM,
+  NZ_SGWV_ITEM,
   UK_GRADUATE_VISA_ITEM,
   SG_WORK_PASS_ITEM,
   JP_LANGUAGE_SCHOOL_ITEM,
   KR_TECH_PILOT_ITEM,
 ];
+
+/** URLs of the hand-verified curated pins (used for filter exemptions). */
+const CURATED_VISA_URLS = new Set(CURATED_VISA_ITEMS.map((it) => it.url));
 
 /**
  * Hosts barred from the fixed visa zone: third-party explainer/blog sites
@@ -2008,7 +2090,7 @@ const CURATED_VISA_ITEMS: OverseasItem[] = [
  */
 const PINNED_VISA_BLOCKED_HOSTS = ["dayonekorea.com", "gistreel.com"];
 
-const PINNED_VISA_KEY = "overseas:visa:pinned:v7";
+const PINNED_VISA_KEY = "overseas:visa:pinned:v9";
 /** Non-curated pinned visa items expire this long after their publish date. */
 const PINNED_VISA_MAX_AGE_MS = 365 * 24 * 3600 * 1000;
 
@@ -2222,6 +2304,14 @@ function sameOverseasEvent(a: OverseasItem, b: OverseasItem): boolean {
     isNzIndiaVisaStatsEventText(`${b.title} ${b.whatChanged ?? ""}`)
   )
     return true;
+  // The D/S fixed-period event: the Yale OISS pin and any outlet's
+  // retelling of it are one event, so a retelling that escaped the
+  // pinned zone still cannot sit in the rotating list next to the pin.
+  if (
+    isDsRulingEventText(`${a.title} ${a.whatChanged ?? ""}`) &&
+    isDsRulingEventText(`${b.title} ${b.whatChanged ?? ""}`)
+  )
+    return true;
   if (a.country !== b.country) return false;
   const ka = fullTitleKey(a.title);
   const kb = fullTitleKey(b.title);
@@ -2261,13 +2351,29 @@ async function mergePinnedVisaItems(ctx: Ctx, discovered: OverseasItem[]): Promi
     // fixed zone, curated items included.
     if (isNotApplicableToUser(it)) return false;
     // Same homepage selection as the rotating list: a story only about
-    // one foreign nationality's applicants never pins either.
-    if (isForeignApplicantsOnlyItem(it)) return false;
+    // one foreign nationality's applicants never pins either. Hand-verified
+    // curated pins are exempt from this nationality filter (user rule,
+    // 2026-11-22): they are selected entries, not search results — the
+    // NZ Short-term Graduate Work Visa future-path item stands alongside
+    // the Yale / Singapore / Japan pins and must not be rotated out by a
+    // filter written for the search-fed list. The applicability check
+    // above still governs curated items.
+    if (!curatedUrls.has(it.url) && isForeignApplicantsOnlyItem(it)) return false;
     // Blocked hosts (third-party explainers, no official original) never pin.
     if (PINNED_VISA_BLOCKED_HOSTS.some((h) => it.url.includes(h) || (it.readUrl ?? "").includes(h))) return false;
     if (curatedUrls.has(it.url)) return true;
+    // Retelling checks run over title + whatChanged + points: an
+    // enrichment can leave whatChanged a single thin sentence (the Inside
+    // Higher Ed D/S retelling's was just 「联邦法官暂缓执行了该规定」) while
+    // the points carry the event's actual signals.
+    const text = `${it.title} ${it.whatChanged ?? ""} ${it.points.join(" ")}`;
+    // Petitions / protests ABOUT visa rules are not themselves visa
+    // changes (requirements, fees, stay length, opening or tightening):
+    // the Stanford graduate union's petition for international students
+    // was auto-pinned by one enrichment run's visa classification, but a
+    // petition changes no rule and never enters the fixed zone.
+    if (/(请愿|联署|抗议|petition|protest)/i.test(text)) return false;
     // Retellings of events a curated item already covers never stay pinned.
-    const text = `${it.title} ${it.whatChanged ?? ""}`;
     if (
       isDsRulingEventText(text) ||
       isNzPswvEventText(text) ||
@@ -2323,7 +2429,31 @@ function isDsRulingEventText(hay: string): boolean {
   // together with an injunction / fixed stay period is this event.
   if (
     /(student visa|international student|foreign student)/i.test(hay) &&
-    /(injunction|fixed[- ](?:period|stay|term)|end(?:ing)?\s+(?:of\s+)?duration)/i.test(hay)
+    /(injunction|fixed[- ](?:period|stay|term|length)|end(?:ing)?\s+(?:of\s+)?duration)/i.test(hay)
+  )
+    return true;
+  // Old-news retellings of the injunction stage itself (user rule,
+  // 2026-11-22): Inside Higher Ed's September piece "5 Things to Know
+  // About New International Student Visa Limits" (2026-09-13) names
+  // neither "duration of status", the case, nor D/S — its whole signal
+  // is the title's "visa limits" phrasing plus a judge pausing the rule
+  // （联邦法官暂缓执行了该规定，针对该政策的诉讼仍在继续）, and it still
+  // reached the fixed zone as an auto-pinned visa discovery. A judge
+  // pausing / halting a student-visa rule, or a "student visa limits"
+  // headline discussed together with the litigation or the fixed-period
+  // rule, IS this event: the Yale item covers it end-to-end (proposal →
+  // 2026-09-14 injunction → 2026-11-16 vacatur), so these retellings
+  // merge into it and never pin or rotate separately.
+  if (
+    /(student visa|international student|foreign student|学生签证|留学生|国际学生)/i.test(hay) &&
+    /(judge|court|法官|法院)/i.test(hay) &&
+    /(paus|block|halt|enjoin|injunction|暂缓|叫停|拦下|阻止|暂停)/i.test(hay)
+  )
+    return true;
+  if (
+    /(student visa|international student|foreign student)/i.test(hay) &&
+    /visa limits?\b/i.test(hay) &&
+    /(judge|court|lawsuit|litigation|fixed|duration|dhs|trump|法官|法院|诉讼|暂缓|固定)/i.test(hay)
   )
     return true;
   // Announcement-side retellings of the same fixed-period rule (no court
@@ -2579,12 +2709,19 @@ interface OverseasEnrichEntry {
  * never reach the homepage list.
  */
 function overseasHomepageItems(items: OverseasItem[]): OverseasItem[] {
-  return items.filter((it) => !isNotApplicableToUser(it) && !isForeignApplicantsOnlyItem(it));
+  return items.filter(
+    (it) =>
+      !isNotApplicableToUser(it) &&
+      // Curated pins are exempt from the foreign-applicant filter (they are
+      // hand-verified selections, not search results) — same exemption as
+      // in mergePinnedVisaItems.
+      (CURATED_VISA_URLS.has(it.url) || !isForeignApplicantsOnlyItem(it)),
+  );
 }
 
 async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: OverseasItem[]; asOf: string }> {
   if (!force) {
-    const cached = await readCache<OverseasItem[]>(ctx, "overseas:all:v14", OVERSEAS_TTL_MS);
+    const cached = await readCache<OverseasItem[]>(ctx, "overseas:all:v17", OVERSEAS_TTL_MS);
     if (cached) return { items: overseasHomepageItems(cached.data), asOf: cached.asOf };
   }
   const raw: FeedItem[] = [];
@@ -2658,11 +2795,11 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
 
   if (deduped.length === 0) {
     await noteRefreshFailure(ctx);
-    const stale = await readCacheStale<OverseasItem[]>(ctx, "overseas:all:v14");
+    const stale = await readCacheStale<OverseasItem[]>(ctx, "overseas:all:v17");
     if (stale) return { items: overseasHomepageItems(stale.data), asOf: stale.asOf };
     // Even with no fresh search results, the fixed visa zone stands.
     const pinnedOnly = await mergePinnedVisaItems(ctx, []);
-    const asOf = await writeCache(ctx, "overseas:all:v14", pinnedOnly);
+    const asOf = await writeCache(ctx, "overseas:all:v17", pinnedOnly);
     return { items: pinnedOnly, asOf };
   }
 
@@ -2899,9 +3036,10 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
   // stay across refreshes; the curated items anchor it ONLY when they pass
   // the applicability check above (mergePinnedVisaItems applies the same
   // rule) — since 2026-11-22 the zone holds the Yale D/S ruling, the
-  // Singapore MOM thresholds and the Japan language-school rule; the NZ /
-  // UK bachelor-only items and the Korea pilot are out because they
-  // clearly do not apply to the user. Pinned items are removed from the
+  // Singapore MOM thresholds, the Japan language-school rule and the NZ
+  // Short-term Graduate Work Visa as a labelled future path; the NZ PSWV
+  // expansion / UK bachelor-only items and the Korea pilot are out
+  // because they clearly do not apply to the user. Pinned items are removed from the
   // rotating list so each appears exactly once.
   const pinned = await mergePinnedVisaItems(ctx, dedupedEvents.filter((it) => it.visa));
   const pinnedUrls = new Set(pinned.map((it) => it.url));
@@ -2919,7 +3057,7 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
     bounded[url] = e;
   }
   await writeCache(ctx, "overseas:enrich:v2", bounded);
-  const asOf = await writeCache(ctx, "overseas:all:v14", all);
+  const asOf = await writeCache(ctx, "overseas:all:v17", all);
   return { items: all, asOf };
 }
 
@@ -3662,7 +3800,7 @@ export const Actions = {
 
   getLearning: defineAction({
     description:
-      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生）, pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等） and expired intakes are all filtered out, so the list may honestly be empty. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip.",
+      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生）, pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships) and expired intakes are all filtered out, so the list may honestly be empty. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip.",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -3831,7 +3969,7 @@ export const Actions = {
 
   getOverseas: defineAction({
     description:
-      "Returns decision-changing overseas opportunities and policy changes for a Chinese 专科 (diploma) student across the US, New Zealand, Singapore, Vietnam, Japan, South Korea, Ireland and the UK: what changed, who it applies to and when it takes effect, with the original university/government link. Applicability is checked BEFORE pinning (2026-11-22): an item that clearly does not apply to the user — bachelor_only, or its own text says 不适用于我 / 不含信息安全技术应用 — is excluded from the column entirely, fixed visa zone included (so the zone now holds the Yale D/S ruling, Singapore MOM thresholds and the Japan language-school rule; the bachelor-only NZ/UK items and the Korea pilot are out). Homepage selection also requires the item to involve Chinese applicants or state a rule for applicants of all countries (2026-11-22): stories only about one foreign nationality's applicants (Indian NZ approval-rate data at 64.1%, Indian PhD post-study rights, visas 'for Indians', Ireland refusals of Indian applicants, a jobs guide for Nigerians) are excluded from the homepage list at ingest, after enrichment, in the pinned-zone merge and on every read of a cached payload — homepage display only, the category archive keeps its data. A bare comparison mention ('India lags behind China') does not count as involving Chinese applicants. In Chinese headlines of the shape 'X国留学生 / X国申请人', X is the applicants' nationality, not the destination (2026-11-22): 《越南留学生如何在加拿大申请留学》 is about Vietnamese applicants applying to Canada and leaves the homepage, while pieces treating Vietnam as the destination （去越南留学 / 越南学生签证规则） and all-applicant content (a Stanford graduate-union petition, a Bowdoin international-student admissions page) stay. One event, one entry: exact duplicates (same title/source/day) and same-event retellings are merged, keeping the official/newest version; the NZ student-visa statistics release is one named event, so its retellings collapse to a single entry before the applicant rule is applied. Student-visa and post-study-work-visa changes carry visa=true and live in a fixed zone (pinned=true): they persist across daily refreshes and are only removed when superseded by a newer item on the same topic, expired, or ruled not applicable. Unclear eligibility stays 'unclear' and is never presented as diploma-eligible. Immigration items carry an identityLabel.",
+      "Returns decision-changing overseas opportunities and policy changes for a Chinese 专科 (diploma) student across the US, New Zealand, Singapore, Vietnam, Japan, South Korea, Ireland and the UK: what changed, who it applies to and when it takes effect, with the original university/government link. Applicability is checked BEFORE pinning (2026-11-22): an item that clearly does not apply to the user — bachelor_only, or its own text says 不适用于我 / 不含信息安全技术应用 — is excluded from the column entirely, fixed visa zone included (so the zone holds the Yale D/S ruling, Singapore MOM thresholds, the Japan language-school rule and — since 2026-11-22, as a hand-verified curated pin exempt from the rotating list's nationality filter — the NZ Short-term Graduate Work Visa labelled as a future path (usable only after completing an NZQCF Level 5–7 qualification in NZ; the user's Jiangxi diploma does not itself qualify, and it is a different visa from the bachelor-only NZ PSWV expansion); the bachelor-only NZ PSWV/UK items and the Korea pilot are out). Homepage selection also requires the item to involve Chinese applicants or state a rule for applicants of all countries (2026-11-22): stories only about one foreign nationality's applicants (Indian NZ approval-rate data at 64.1%, Indian PhD post-study rights, visas 'for Indians', Ireland refusals of Indian applicants, a jobs guide for Nigerians) are excluded from the homepage list at ingest, after enrichment, in the pinned-zone merge and on every read of a cached payload — homepage display only, the category archive keeps its data. A bare comparison mention ('India lags behind China') does not count as involving Chinese applicants. In Chinese headlines of the shape 'X国留学生 / X国申请人', X is the applicants' nationality, not the destination (2026-11-22): 《越南留学生如何在加拿大申请留学》 is about Vietnamese applicants applying to Canada and leaves the homepage, while pieces treating Vietnam as the destination （去越南留学 / 越南学生签证规则） and all-applicant content (a Stanford graduate-union petition, a Bowdoin international-student admissions page) stay. One event, one entry: exact duplicates (same title/source/day) and same-event retellings are merged, keeping the official/newest version; the NZ student-visa statistics release is one named event, so its retellings collapse to a single entry before the applicant rule is applied. Student-visa and post-study-work-visa changes carry visa=true and live in a fixed zone (pinned=true): they persist across daily refreshes and are only removed when superseded by a newer item on the same topic, expired, or ruled not applicable. Unclear eligibility stays 'unclear' and is never presented as diploma-eligible. Immigration items carry an identityLabel.",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),

@@ -86,7 +86,7 @@
   },
   "note": "从 2026-11-22c 线上版 server/src/actions.ts 提取（JIANGXI_QUERIES、OVERSEAS_QUERIES、OVERSEAS_VISA_QUERIES、OVERSEAS_JOB_QUERIES、MYWORLD_*、CURATED_VISA_ITEMS 等常量与各过滤函数）。c 版新增三条首页选稿规则：海外「只讲单一外国国籍申请人」移出首页（isForeignApplicantsOnlyItem）、江西已结束考区提醒移出可见列表（isJiangxiEndedExamReminder）、观察栏地方节庆交通提示过滤（isLocalFestivalTrafficNotice），以及越南国籍/目的地辨析修正（foreignApplicantSignal 新分支）。",
   "overseas": {
-    "applicabilityBeforePinning": "2026-11-22 新增（isNotApplicableToUser）：适用性排在置顶规则之前——eligibility=bachelor_only，或条目自己的文本写明不适用于我/不含信息安全技术应用的，移出首页、永不置顶。因此人工条目里的新西兰毕业后工签、英国毕业生签证、韩国试点虽然仍在 CURATED_VISA_ITEMS 里，首页固定区实际只显示美国耶鲁 D/S、新加坡 MOM、日本语言学校 3 条",
+    "applicabilityBeforePinning": "2026-11-22 新增（isNotApplicableToUser）：适用性排在置顶规则之前——eligibility=bachelor_only，或条目自己的文本写明不适用于我/不含信息安全技术应用的，移出首页、永不置顶。因此人工条目里的新西兰毕业后工签、英国毕业生签证、韩国试点虽然仍在 CURATED_VISA_ITEMS 里，首页固定区实际只显示美国耶鲁 D/S、新加坡 MOM、日本语言学校 3 条。2026-11-22d 起人工条目新增第 7 条「新西兰短期毕业工签」（NZ_SGWV_ITEM，标为未来路径、eligibility=unclear，不命中本规则），固定区实际显示变为 4 条：耶鲁 D/S、新西兰短期工签、新加坡 MOM、日本语言学校",
     "cacheTtlMinutes": 60,
     "categories": {
       "note": "2026-11-22 五类结构：海外内容拆成两类，每条只归一个主类；岗位和政策分别标记，政策不标「岗位可申请」；政府工作许可/移民政策链接官方原文，带适用身份、生效日期和提案/已生效状态",
@@ -123,6 +123,15 @@
         "title": "Post-Study Work Visa eligibility extended（新西兰移民局官方）",
         "url": "https://www.immigration.govt.nz/about-us/news-centre/post-study-work-visa-eligibility-extended-from-16-november-2026/",
         "whatChanged": "毕业后工作签证扩大到「7 级研究生文凭（新西兰全日制读完）+ 学士学位」的毕业生，最长 1 年；同日新设 6 个月短期毕业生工作签证。只限学士学位，2026-11-22 起按「适用性优先于置顶」移出首页"
+      },
+      {
+        "country": "新西兰",
+        "effectiveWhen": "2026 年 11 月 23 日起（修正指令 Amendment Circular 2026-36 确认；移民局落地页仍写 11 月 16 日，那是因微软故障推迟前的旧日期）",
+        "eligibility": "unclear",
+        "source": "新西兰移民局（Immigration New Zealand）",
+        "title": "Short-term Graduate Work Visa（新西兰短期毕业工签 · 未来路径）",
+        "url": "https://www.immigration.govt.nz/about-us/news-centre/new-and-updated-post-study-work-visa-options/",
+        "whatChanged": "2026-11-22d 新增的人工核实条目（NZ_SGWV_ITEM），按用户要求以「未来路径」加回固定区：在新西兰全日制读满至少 24 周、取得 NZQCF 5–7 级学历（不含语言、预科、桥梁课程）、且不符合毕业后工签（PSWV）条件的人，可获 6 个月开放工作签证，只批一次、不能续签；资金至少 5,000 新元，须在新西兰学生签证到期后 3 个月内申请，此前不能持有过短期毕业工签或毕业后工签。页面主人在江西读的大专本身不算，中国大专对应 NZQCF 哪一级移民局没有写明——先去新西兰读完 5–7 级学历后才用得上。与 PSWV 扩大（7 级研究生文凭 + 学士学位）是两条不同的签证，不可混同。作为人工核实条目，按链接豁免「只讲单一外国国籍申请人」的首页过滤（见 foreignApplicantsOnly），适用性规则仍管辖本条"
       },
       {
         "country": "英国",
@@ -163,7 +172,7 @@
         "whatChanged": "法务部试点：16 所职业院校指定技术专业的 D-2 留学生，TOPIK 3+ 免资金证明、打工上限 30→35 小时/周、毕业对口就业可换 E-7-M（K-CORE）签证；16 个专业不含信息安全技术应用，条目自己写明不适用于页面主人，2026-11-22 起按「适用性优先于置顶」移出首页。2026 年 10 月的改革方案尚未生效，未收录"
       }
     ],
-    "pinnedVisaNote": "固定区规则：6 条人工核实条目（CURATED_VISA_ITEMS）在代码里永远占位，但首页展示先过适用性过滤（见 applicabilityBeforePinning），实际显示 3 条；搜索发现的签证类条目经模型判定 visa=true 后自动固定（存 overseas:visa:pinned:v6，同国家+同标题的新条目顶替旧条目，非人工条目发布满 365 天过期）；同一事件的转述在入库和合并两处都被丢弃（D/S 裁决、新西兰毕业后工签、英国毕业生签证缩短、日本语言学校新规、韩国试点各有专门匹配器）；dayonekorea.com 和 gistreel.com 被硬性禁止进入固定区（第三方解说/转述冒充官方原文的前科）。",
+    "pinnedVisaNote": "固定区规则：7 条人工核实条目（CURATED_VISA_ITEMS）在代码里永远占位，但首页展示先过适用性过滤（见 applicabilityBeforePinning），实际显示 4 条（耶鲁 D/S、新西兰短期毕业工签、新加坡 MOM、日本语言学校）；搜索发现的签证类条目经模型判定 visa=true 后自动固定（存 overseas:visa:pinned:v9，同国家+同标题的新条目顶替旧条目，非人工条目发布满 365 天过期）；同一事件的转述在入库和合并两处都被丢弃（D/S 裁决、新西兰毕业后工签、英国毕业生签证缩短、日本语言学校新规、韩国试点各有专门匹配器）；dayonekorea.com 和 gistreel.com 被硬性禁止进入固定区（第三方解说/转述冒充官方原文的前科）。2026-11-22d 新增：人工核实条目按链接（CURATED_VISA_URLS）豁免「只讲单一外国国籍申请人」过滤——它们是人工选定的条目而非搜索结果，新西兰短期工签因此不会被轮换列表的国籍规则刷掉，适用性过滤仍照常管辖；请愿/联署/抗议类条目（petition/protest）讲的是呼吁改规则、本身不改变任何规则，永不进固定区（斯坦福研究生工会请愿即按此处理，只留在轮换列表）；D/S 事件匹配器（isDsRulingEventText）再扩：识别 fixed-length 说法、新增「法官暂缓/叫停学生签证规则」分支和「student visa limits 标题 + 诉讼/固定期限语境」分支，Inside Higher Ed 2026-09-13 的旧解释文（标题与要点均不出现 duration of status）也并入耶鲁那条、不再单独置顶；固定区合并的转述判定文本扩为标题+whatChanged+要点全文。",
     "queries": [
       "中国大专 留学 申请 大学",
       "专科生 留学 奖学金 申请",
@@ -174,7 +183,7 @@
       "Ireland UK student visa international students change",
       "Japan Korea Singapore student visa international students"
     ],
-    "sameEventDedupe": "2026-11-22 强化（sameOverseasEvent）：轮换列表按事件去重——标题归一化后完全相同即同事件（不限日期）；否则须同国家、共享一个 2 位以上显著数字、标题字符集相似度 ≥0.6、发布日期相差 7 天内。另有具名事件匹配器：印度–新西兰自贸协定（isIndiaNzFtaEventText，标题无显著数字也能识别，只留官方/最新一条）",
+    "sameEventDedupe": "2026-11-22 强化（sameOverseasEvent）：轮换列表按事件去重——标题归一化后完全相同即同事件（不限日期）；否则须同国家、共享一个 2 位以上显著数字、标题字符集相似度 ≥0.6、发布日期相差 7 天内。另有具名事件匹配器：印度–新西兰自贸协定（isIndiaNzFtaEventText，标题无显著数字也能识别，只留官方/最新一条）；新西兰—印度学生签证获批率统计（isNzIndiaVisaStatsEventText，c 版）同理先合并成一个事件再由申请人规则处理。2026-11-22d 再加一条：轮换列表内两条只要都命中 D/S 事件匹配器（isDsRulingEventText）即判同一事件——耶鲁固定条目的转述即使漏出固定区，也不能在轮换列表里与固定条目并排出现。",
     "searchEngine": "Bing News RSS（bingNewsUrlAll），候选窗口 150 天",
     "searchWindowDays": 150,
     "stages": [
@@ -197,7 +206,7 @@
       "Ireland student visa Third Level Graduate Scheme changes",
       "UK Graduate visa student visa changes 2027"
     ],
-    "foreignApplicantsOnly": "2026-11-22c 新增（isForeignApplicantsOnlyItem / isForeignApplicantsOnlyFields，信号函数 foreignApplicantSignal / chinaApplicantSignal / allApplicantsSignal）：主题只涉及单一外国国籍申请人的条目默认移出首页——除非它本身涉及中国申请人（中国须是申请人/留学生本人，仅作对比基线如「印度落后中国」不算），或写明适用于各国申请人的通用规则；整理后的 whoApplies 写明中国/各国申请人的永远保留。在入库（原始标题+摘要）、整理后、固定区合并、每次读回（overseasHomepageItems）四处都执行；只影响首页展示，分类归档数据不动；固定区三条（耶鲁/新加坡/日本）不受影响。具名事件合并 isNzIndiaVisaStatsEventText（新西兰+印度+学生签证+获批率/数据类措辞）并入 sameOverseasEvent：Moneycontrol 64.1% 与 Newspoint「印度落后中国」先并成一个事件，再被申请人规则整体移出。实测移出：Moneycontrol 64.1%、Newspoint、印度博士生 4 年工签（NIE/Edex）、爱尔兰拒签印度申请人、印度人新工签、Punch 尼日利亚求职指南。已知漏检：NDTV 的 MeitY 实习条目标题/摘要无确定性国籍信号，未被规则命中（如实记录）。",
+    "foreignApplicantsOnly": "2026-11-22c 新增（isForeignApplicantsOnlyItem / isForeignApplicantsOnlyFields，信号函数 foreignApplicantSignal / chinaApplicantSignal / allApplicantsSignal）：主题只涉及单一外国国籍申请人的条目默认移出首页——除非它本身涉及中国申请人（中国须是申请人/留学生本人，仅作对比基线如「印度落后中国」不算），或写明适用于各国申请人的通用规则；整理后的 whoApplies 写明中国/各国申请人的永远保留。在入库（原始标题+摘要）、整理后、固定区合并、每次读回（overseasHomepageItems）四处都执行；只影响首页展示，分类归档数据不动；人工核实条目按链接豁免本规则（d 版起，CURATED_VISA_URLS），固定区四条（耶鲁/新西兰短期工签/新加坡/日本）不受影响。具名事件合并 isNzIndiaVisaStatsEventText（新西兰+印度+学生签证+获批率/数据类措辞）并入 sameOverseasEvent：Moneycontrol 64.1% 与 Newspoint「印度落后中国」先并成一个事件，再被申请人规则整体移出。实测移出：Moneycontrol 64.1%、Newspoint、印度博士生 4 年工签（NIE/Edex）、爱尔兰拒签印度申请人、印度人新工签、Punch 尼日利亚求职指南。已知漏检：NDTV 的 MeitY 实习条目标题/摘要无确定性国籍信号，未被规则命中（如实记录）。",
     "nationalityVsDestination": "2026-11-22c 补修（foreignApplicantSignal 新分支）：中文标题「X 国留学生 / X 国申请人」句式里 X 是申请人国籍（越南/柬埔寨/老挝/缅甸/蒙古/俄罗斯/乌克兰/斯里兰卡/哈萨克斯坦），仅当文中同时点名另一个国家为申请目的地（在|去|赴|前往|申请+国名，或国名+留学|签证|大学|学院）时才算外国申请人信号；越南作为目的地本身（去越南留学、越南学生签证新规、越南留学生活指南）不触发。中国教育在线《越南留学生如何在加拿大申请留学》即按此移出首页；斯坦福请愿、Bowdoin 招生页（各国申请人范围）保留。"
   }
 }

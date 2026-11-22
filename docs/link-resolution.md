@@ -26,7 +26,7 @@
 ## 同一事件只留一条（去重）
 
 - 通用层：按链接去重；「我关注的世界」再按标题归一化键（去空格标点取前 14 字）合并同一事件。
-- 签证固定区有五个「同一事件只留一条」的事件匹配器，命中转述就在入库和固定区合并两处丢弃：美国 D/S 裁决（`isDsRulingEventText`，含「学生签证 + 禁令/固定期限」的英文形态；2026-11-22 起也识别「4-year cap / 4 年上限」这类对固定期限提案的说法，MSN 等转载的同事件旧闻并入耶鲁那条、不单独置顶）、新西兰毕业后工签扩大（`isNzPswvEventText`）、英国毕业生签证缩短（`isUkGraduateCutEventText`）、日本语言学校 A1 证明新规（`isJpLanguageSchoolEventText`）、韩国 16 专业技术试点（`isKrTechPilotEventText`）。每个事件只保留人工核实的那一条（见 `config/columns.json` 的 `pinnedVisaItems`）。
+- 签证固定区有五个「同一事件只留一条」的事件匹配器，命中转述就在入库和固定区合并两处丢弃：美国 D/S 裁决（`isDsRulingEventText`，含「学生签证 + 禁令/固定期限」的英文形态；2026-11-22 起也识别「4-year cap / 4 年上限」这类对固定期限提案的说法，MSN 等转载的同事件旧闻并入耶鲁那条、不单独置顶；2026-11-22d 再扩：识别 fixed-length、「学生签证 + 法官/法院 + 暂缓/叫停」分支和「student visa limits 标题 + 诉讼/固定期限语境」分支，Inside Higher Ed 2026-09-13 那篇标题和要点都不出现 duration of status 的旧解释文也并入耶鲁条目；固定区合并的转述判定文本扩为标题+变了什么+要点全文，轮换列表内两条都命中本匹配器也判同一事件）、新西兰毕业后工签扩大（`isNzPswvEventText`）、英国毕业生签证缩短（`isUkGraduateCutEventText`）、日本语言学校 A1 证明新规（`isJpLanguageSchoolEventText`）、韩国 16 专业技术试点（`isKrTechPilotEventText`）。每个事件只保留人工核实的那一条（见 `config/columns.json` 的 `pinnedVisaItems`）。
 - 海外轮换列表 2026-11-22 起按事件去重（`sameOverseasEvent`）：标题归一化（去空格标点、小写）完全相同即同事件，不限日期（这条治的是标题、来源、日期都相同的重复报道）；否则要求同国家、共享一个 2 位以上显著数字、标题字符集相似度 ≥0.6、发布日期相差 7 天以内。印度–新西兰自贸协定的两篇报道标题没有显著数字，另有具名匹配器 `isIndiaNzFtaEventText`（印度 + 新西兰 + FTA/自贸/新增工作签证），命中只留官方/最新一条。
 
 ## 屏蔽与禁用名单
