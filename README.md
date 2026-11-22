@@ -69,3 +69,5 @@ bun run typecheck    # client + server 两个 tsconfig
 
 - `node_modules/`、构建产物（`client/dist/`、`server/dist/` 等）、`data/app.db` 数据库文件 — 都是可再生成的，且数据库里是缓存和个人订阅/收藏，不属于源码。
 - 任何密钥 — 包里只有 `.env.example` 的变量名。
+
+同日 e 版补丁：学习栏「只限特定企业/机构员工或其子女」过滤补上英文单数形式——WCMA 奖学金存量文本写作 "Any employee or child of an employee …"，单数的 "child of an employee" 不命中 d 版的复数信号，自建版（无模型）因此漏过；e 版在同一分支新增 `/child(ren)? of (an?|the)? (employee|staff)/i` 与 `/employee(s)? or (a )?child of/i`，并用存量原文验过。

@@ -882,12 +882,17 @@ function isLearningNotActionable(
   if (/不适用于(我|中国)|仅限[^。]{0,10}(公民|居民|学生)(申请|参加)?/.test(text)) return true;
   // Clearly not applicable to him: the offer is restricted to one specific
   // employer's / organisation's employees or their children (the WCMA
-  // dairy-company employees' children scholarships, WSAU 2026-11-19 — he
-  // is neither an employee of a WCMA member company nor an employee's
-  // child there, so he cannot apply). Same treatment as the
-  // single-foreign-country offers above (user rule, 2026-11-22).
+  // dairy-company scholarships, WSAU 2026-11-19 — its stored text reads
+  // "Any employee or child of an employee at a WCMA dairy manufacturing,
+  // processing, or …", a SINGULAR "child of an employee" wording the
+  // plural-only patterns missed; he is neither an employee of a WCMA
+  // member company nor an employee's child there, so he cannot apply).
+  // Same treatment as the single-foreign-country offers above (user
+  // rule, 2026-11-22; singular-form patterns added 2026-11-22 follow-up).
   if (
     /only for (the )?employees|children of employees|employ\w+('s|s')? children/i.test(text) ||
+    /child(ren)? of (an?|the)? (employee|staff)/i.test(text) ||
+    /employee(s)? or (a )?child of/i.test(text) ||
     /(只限|仅限|仅面向|只面向)[^。]{0,16}(员工|职工)/.test(text) ||
     /(员工|职工)(或其|及其)?的?(子女|孩子)/.test(text)
   )
@@ -3800,7 +3805,7 @@ export const Actions = {
 
   getLearning: defineAction({
     description:
-      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生）, pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships) and expired intakes are all filtered out, so the list may honestly be empty. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip.",
+      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生）, pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships) and expired intakes are all filtered out, so the list may honestly be empty. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip.",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),

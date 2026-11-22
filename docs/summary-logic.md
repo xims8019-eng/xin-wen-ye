@@ -53,6 +53,8 @@
 
 **2026-11-22d 新增：只限特定雇主员工或其子女的机会移出学习列表（`isLearningNotActionable` 新分支，学习整理提示词同步写明 keep=false）。** 英文信号：only for employees / children of employees / employee's children；中文信号：「只限/仅限/仅面向/只面向…员工/职工」「员工/职工（或其/及其）子女/孩子」。具名案例是 WCMA（威斯康星奶酪制造商协会）奖学金：每份 5,000 美元、只限 WCMA 会员乳制品企业员工的子女申请，页面主人既非该企业员工、也非员工子女，无法申请（WSAU 2026-11-19 报道）。处理方式与「只面向其他国家本国学生/居民」相同：代码规则在每次读回时执行，缓存里的旧条目也立即服从。
 
+**2026-11-22e 补修：英文信号补上单数形式。** WCMA 条目的存量文本写作 “Any employee or child of an employee at a WCMA dairy manufacturing, processing, or …”——单数的 “child of an employee” 不命中 d 版的复数信号；Muse 版靠模型入库时标 keep=false 才没漏，自建版没有模型、只有代码规则，因此漏过。e 版在同一分支新增两条正则：`/child(ren)? of (an?|the)? (employee|staff)/i` 与 `/employee(s)? or (a )?child of/i`，并用存量原文逐条验过（旧规则不命中、新规则命中，普通奖学金/课程文本不误伤）。
+
 ## 5. 江西专升本整理（`loadJiangxi`，用到模型）
 
 - 4 条 Bing 搜索（无时间窗，往年材料作备考参考），标题含成人高考/自考的过滤掉。
