@@ -818,7 +818,8 @@ interface EnrichEntry {
  * handler re-applies it to every response), not only to the homepage
  * digest strips. Hidden: opportunities whose deadline has already
  * passed; reports of events that are already over （研讨会/研讨活动
- * without an open call, 收官， 获奖名单， 圆满结束…); items aimed at a
+ * without an open call, 收官/落幕/闭幕， 赛报/获奖/一等奖， 获奖名单，
+ * 圆满结束… — unless a replay is offered); items aimed at a
  * school stage that is not his — 中小学/初中/高中 students, or 博士/硕士
  * 研究生 admissions (he is a 专科 student); pure news reports and
  * industry forums; and items that clearly do not apply to him — open
@@ -844,6 +845,18 @@ function isLearningNotActionable(
   // Already-finished events and write-ups of them.
   if (/研讨会|研讨活动/.test(t) && !/报名|征集|将于|预告/.test(t)) return true;
   if (/圆满(结束|落幕|举行)|落下帷幕|成功(举办|召开|举行)|完美收官|圆满收官|获奖名单|颁奖(典礼|仪式)/.test(t)) return true;
+  // Bare closing / results wording (user, 2026-11-22 follow-up): the fixed
+  // phrases above miss a plain 收官/落幕/闭幕 in a title （零碳大赛宁德收官）
+  // and results write-ups （赛报/获奖/一等奖 — the 广西信息素养挑战赛赛报）.
+  // Both groups mark a finished event — unless a replay is offered, in
+  // which case the user can still watch it and the item stays.
+  // （赛报 is matched only as a leading/section word — a bare substring
+  // test would also hit 竞赛报名， i.e. "registration open", the opposite.)
+  if (
+    (/(收官|落幕|闭幕|获奖|一等奖)/.test(t) || /(^|[\s|｜【〔])赛报/.test(t)) &&
+    !/(回放|回看)/.test(text)
+  )
+    return true;
   // Wrong school stage: primary / secondary school audiences.
   if (/中小学|中小学生|小学生|初中生|高中生|九年一贯制/.test(t)) return true;
   // Graduate admissions are not his stage either.
@@ -1089,7 +1102,7 @@ async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: Learning
       .join("\n");
     return (
       `你在为学生整理一个「学习」资讯栏目。下面是抓到的候选条目（带编号）。请逐条判断并整理：\n` +
-      `- keep：是否真的对学生学习有用（课程/讲座、学习资源、或可报名的竞赛/暑期学校/奖学金等机会）。教材出版、学习工具、教育资源类资讯，只要对学生或教师的学习有实际参考价值，也 keep=true。纯娱乐、明星八卦、招生广告软文、培训机构广告、与学习无关的新闻，keep=false。已经结束的活动报道（如已召开的研讨会、论坛回顾、获奖名单），以及只面向中小学生或博士/硕士研究生的内容，对一位专科在读生没有可行动价值，keep=false。纯新闻报道（时事评论、行业动态、企业产品或合作消息、大学项目介绍）即使与教育有关也不是能参加的学习内容，keep=false；面向行业从业者的论坛、峰会，keep=false；只面向某个外国国家本国学生/居民的机会（如仅限巴基斯坦、马来西亚学生），以及入学时间已经过去的招生，keep=false。本栏只留他现在还能报名、能看回放或能直接开始学的内容，宁缺毋滥。\n` +
+      `- keep：是否真的对学生学习有用（课程/讲座、学习资源、或可报名的竞赛/暑期学校/奖学金等机会）。教材出版、学习工具、教育资源类资讯，只要对学生或教师的学习有实际参考价值，也 keep=true。纯娱乐、明星八卦、招生广告软文、培训机构广告、与学习无关的新闻，keep=false。已经结束的活动报道（如已召开的研讨会、论坛回顾、获奖名单、大赛收官/落幕/闭幕的报道、赛报和获奖喜报——除非明确提供回放/回看），以及只面向中小学生或博士/硕士研究生的内容，对一位专科在读生没有可行动价值，keep=false。纯新闻报道（时事评论、行业动态、企业产品或合作消息、大学项目介绍）即使与教育有关也不是能参加的学习内容，keep=false；面向行业从业者的论坛、峰会，keep=false；只面向某个外国国家本国学生/居民的机会（如仅限巴基斯坦、马来西亚学生），以及入学时间已经过去的招生，keep=false。本栏只留他现在还能报名、能看回放或能直接开始学的内容，宁缺毋滥。\n` +
       `- category：courses（课程与讲座）/ resources（学习资源）/ opportunities（学生机会），以内容为准，可修正类别提示。\n` +
       `- summaryZh：用一句中文说清「适合谁、能学到什么」。只能依据摘要里已有的信息写（摘要是英文的就翻译提炼），不要编造课程内容、机构承诺或数字。条目标注「无摘要，仅有标题」时，summaryZh 必须留空字符串——绝不根据标题猜测正文。\n` +
       `- pointsZh：2-3 条中文要点，逐条只能来自摘要原文的信息（英文摘要翻译成中文）；无摘要的条目留空数组。\n` +

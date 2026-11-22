@@ -1192,10 +1192,10 @@ function HomeView({ onGoLearning }: { onGoLearning: () => void }) {
     <div>
       <JiangxiSection />
       <RecentApplicableSection />
-      <OverseasCategorySection category="study" />
-      <OverseasCategorySection category="work_visa" />
       <WorldSection />
       <LearningSection onGoLearning={onGoLearning} />
+      <OverseasCategorySection category="study" />
+      <OverseasCategorySection category="work_visa" />
       <HotSection />
     </div>
   );
