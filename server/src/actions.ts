@@ -1831,6 +1831,15 @@ interface OverseasItem {
   visaSupport?: "yes" | "no" | "unstated";
   policyStatus?: "enacted" | "proposal" | "unstated" | "upcoming" | null;
   /**
+   * Optional verbatim status label that overrides the generic
+   * policyStatus wording in the card chip and the expanded 状态 row.
+   * Set only where the generic 已生效/即将生效/提案 wording would
+   * misstate the verified facts — the Yale OISS D/S card (2026-11-22):
+   * the challenged rule never took effect, so D/S was never interrupted
+   * and the label must read 「D/S 继续适用」, never 「恢复」.
+   */
+  policyStatusLabel?: string | null;
+  /**
    * Structured effective date (YYYY-MM-DD) plus the policy location's IANA
    * time zone, when the status label must be COMPUTED from the location's
    * own local date (user rule, 2026-11-22) instead of trusting a stored
@@ -1854,6 +1863,20 @@ const OVERSEAS_TTL_MS = 60 * 60 * 1000;
  * event as ~6 separate media items, so it is pinned here as a single entry
  * sourced from a university's own office (Yale OISS, updated 2026-11-17,
  * page links the court order PDF) instead of aggregator/media reposts.
+ * Wording correction (2026-11-22, user-verified against the Yale OISS
+ * original, page updated 2026-11-17, checked 2026-11-22): the three dates /
+ * states must stay distinct — (1) the 2026-11-16 judgment set aside the
+ * challenged rule; (2) the rule NEVER took effect ("The rule never took
+ * effect.") — it was enjoined on 2026-09-14, the day before its scheduled
+ * 2026-09-15 effective date; (3) D/S therefore CONTINUES to apply
+ * ("Duration of status remains in effect. F-1 students, J-1 students and
+ * scholars, and their F-2 and J-2 dependents generally continue to be
+ * admitted for D/S."). D/S was never interrupted, so the card must never
+ * say 「恢复 D/S」; the top status label is the verbatim override
+ * 「D/S 继续适用」 (policyStatusLabel), not the generic 生效状态未说明 /
+ * 已生效 wording. DHS may appeal, but per Yale OISS "Filing an appeal by
+ * itself would not put the rule into effect." — rendered as 「仅上诉本身
+ * 不会让该规则生效」.
  */
 const DS_RULING_ITEM: OverseasItem = {
   title: "Elimination of Duration of Status: Summary & FAQs（耶鲁大学 OISS）",
@@ -1862,17 +1885,19 @@ const DS_RULING_ITEM: OverseasItem = {
   publishedAt: "2026-11-17T00:00:00.000Z",
   country: "美国",
   whatChanged:
-    "法院整体推翻固定停留期规则，D/S（停留期限）保留：2026-11-16 美国马萨诸塞联邦地区法院在 Presidents' Alliance v. DHS（No. 1:26-cv-13799-FDS）一案中，整体推翻国土安全部取消留学生「停留期限」（D/S）的最终规则；该规则原定 2026-09-15 生效，但已于 9 月 14 日被法院禁令拦下，从未生效。",
+    "D/S 继续适用，法院整体推翻固定停留期规则：2026-11-16 美国马萨诸塞联邦地区法院在 Presidents' Alliance v. DHS（No. 1:26-cv-13799-FDS）一案中，推翻（set aside）国土安全部取消留学生「停留期限」（D/S）、改固定停留期的最终规则；该规则原定 2026-09-15 生效，但已于 9 月 14 日被法院禁令拦下，从未生效，D/S 从未中断。",
   whoApplies: "未来持 F-1/J-1 赴美留学的中国学生（含专科背景申请人）",
-  effectiveWhen: "2026-11-16 裁决即恢复 D/S；国土安全部可能上诉，但上诉本身不恢复该规则",
+  effectiveWhen: "D/S 继续适用：2026-11-16 法院裁决推翻被诉规则；被诉规则原定 2026-09-15 生效、9 月 14 日已被禁令拦下、从未生效；国土安全部可能上诉，但仅上诉本身不会让该规则生效",
   eligibility: "diploma_eligible",
   isImmigration: false,
   identityLabel: null,
   points: [
-    "D/S 继续有效，F-1/J-1 学生按录取与学业期限合法停留，无需采取任何行动。",
-    "被推翻的固定停留期规则原定 2026-09-15 生效，9 月 14 日已被禁令拦下，从未生效。",
-    "耶鲁 OISS 该页面（2026-11-17 更新）附有法院命令 PDF 链接；国土安全部可能上诉，但上诉本身不恢复该规则。",
+    "D/S 继续适用：F-1 学生、J-1 学生与学者及其 F-2、J-2 家属，一般仍按 D/S（停留期限）入境停留，按录取与学业期限合法在美，无需采取任何行动。",
+    "被推翻的固定停留期规则原定 2026-09-15 生效，9 月 14 日已被法院禁令拦下，从未生效——D/S 从未中断过，所以是继续适用。",
+    "耶鲁 OISS 该页面（2026-11-17 更新，本次核对 2026-11-22）附有法院命令 PDF 链接；国土安全部可能上诉，但仅上诉本身不会让该规则生效。",
   ],
+  policyStatus: "enacted",
+  policyStatusLabel: "D/S 继续适用",
   titleOnly: false,
   readUrl: "https://oiss.yale.edu/immigration/elimination-of-duration-of-status-summary-faqs",
   needsLogin: false,
@@ -2837,7 +2862,7 @@ function overseasHomepageItems(items: OverseasItem[]): OverseasItem[] {
 
 async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: OverseasItem[]; asOf: string }> {
   if (!force) {
-    const cached = await readCache<OverseasItem[]>(ctx, "overseas:all:v18", OVERSEAS_TTL_MS);
+    const cached = await readCache<OverseasItem[]>(ctx, "overseas:all:v19", OVERSEAS_TTL_MS);
     if (cached) return { items: overseasHomepageItems(cached.data), asOf: cached.asOf };
   }
   const raw: FeedItem[] = [];
@@ -2911,11 +2936,11 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
 
   if (deduped.length === 0) {
     await noteRefreshFailure(ctx);
-    const stale = await readCacheStale<OverseasItem[]>(ctx, "overseas:all:v18");
+    const stale = await readCacheStale<OverseasItem[]>(ctx, "overseas:all:v19");
     if (stale) return { items: overseasHomepageItems(stale.data), asOf: stale.asOf };
     // Even with no fresh search results, the fixed visa zone stands.
     const pinnedOnly = await mergePinnedVisaItems(ctx, []);
-    const asOf = await writeCache(ctx, "overseas:all:v18", pinnedOnly);
+    const asOf = await writeCache(ctx, "overseas:all:v19", pinnedOnly);
     return { items: pinnedOnly, asOf };
   }
 
@@ -3188,7 +3213,7 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
     bounded[url] = e;
   }
   await writeCache(ctx, "overseas:enrich:v2", bounded);
-  const asOf = await writeCache(ctx, "overseas:all:v18", all);
+  const asOf = await writeCache(ctx, "overseas:all:v19", all);
   return { items: all, asOf };
 }
 
@@ -3457,6 +3482,7 @@ const overseasItemSchema = z.object({
   acceptsOverseas: z.boolean().nullable(),
   visaSupport: z.enum(["yes", "no", "unstated"]),
   policyStatus: z.enum(["enacted", "proposal", "unstated", "upcoming"]).nullable(),
+  policyStatusLabel: z.string().nullable(),
 });
 
 const worldItemSchema = feedItemSchema.extend({
@@ -3692,6 +3718,7 @@ function normalizeOverseas(raw: OverseasItem): z.infer<typeof overseasItemSchema
     acceptsOverseas: it.acceptsOverseas ?? null,
     visaSupport: it.visaSupport ?? "unstated",
     policyStatus: computedStatus ?? it.policyStatus ?? (kind === "policy" ? "unstated" : null),
+    policyStatusLabel: it.policyStatusLabel ?? null,
   };
 }
 
