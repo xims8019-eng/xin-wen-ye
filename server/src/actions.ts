@@ -1176,6 +1176,50 @@ async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: Learning
 const WFYI_SCHOLARSHIP_URL =
   "https://www.wfyi.org/education/2026-11-20/new-indiana-college-scholarship-offers-students-up-to-5-000-to-finish-degrees";
 
+/**
+ * Homepage filter for the 学习 column (2026-11-22, user rule): show only
+ * what the user can still join, watch a replay of, or start learning
+ * directly. Ended one-off events （研讨会 / 大赛收官 / 获奖报道…), items
+ * aimed at other school stages （中小学 / 初中 / 博士 / 硕士研究生）, and
+ * pure education news with nothing to join or learn are hidden from the
+ * homepage. If nothing qualifies, the column is left empty rather than
+ * padded. Deterministic (title/summary/fields only) so it also works on the
+ * self-hosted build, where no model key is configured and enrichment is
+ * unavailable. Applied on read (getLearning), so cached items are filtered
+ * immediately.
+ */
+export function isLearningHomepageItem(it: LearningItem): boolean {
+  const todayStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
+  const text = `${it.title} ${it.summaryZh ?? ""} ${(it.points ?? []).join(" ")}`;
+  // Wrong school stage for a second-year 专科 student. Title only (plus the
+  // enrichment field when present): roundup summaries can mention another
+  // stage in passing while the item itself is still relevant.
+  if (/中小学|初中|小学|幼儿园|博士|硕士|研究生/.test(it.title)) return false;
+  if (
+    it.audienceStage &&
+    /小学|初中|高中|硕士|博士|研究生/.test(it.audienceStage) &&
+    !/本科|专科|不限|大学/.test(it.audienceStage)
+  )
+    return false;
+  // Ended one-off events with nothing left to join or replay.
+  if (
+    /(研讨会|座谈会|论坛|峰会|交流会|大赛|竞赛|挑战赛)/.test(it.title) &&
+    /(举办|举行|召开|落幕|闭幕|收官|圆满结束|成功举办)/.test(it.title)
+  )
+    return false;
+  if (/(赛报|获奖|一等奖|二等奖|三等奖|收官|落幕|闭幕)/.test(it.title) && !/回放|回看/.test(text)) return false;
+  // Still open: a future deadline always qualifies.
+  if (it.deadline && it.deadline >= todayStr) return true;
+  // Directly joinable / learnable, by title or summary.
+  if (
+    /报名|申请|奖学金|助学金|夏校|冬令营|课程|公开课|讲座|网课|免费|在线学习|教材|题库|回放|回看|试听|训练营|工作坊|竞赛|大赛|挑战赛|招生|专升本|四六级|scholarship|apply now|free course|online course|online learning|learning plans|tutorial|how to learn|learn to/i.test(
+      text,
+    )
+  )
+    return true;
+  return false;
+}
+
 function correctLearningItem(it: LearningItem): LearningItem {
   const blockedReason = it.blockedReason ?? cnBlockedReason(it.readUrl ?? it.url);
   if (it.url !== WFYI_SCHOLARSHIP_URL && it.readUrl !== WFYI_SCHOLARSHIP_URL) {
@@ -1333,6 +1377,23 @@ function jiangxiFallback(it: FeedItem): JiangxiEnrichEntry {
   };
 }
 
+/**
+ * Homepage exclusion for the 江西专升本 column (2026-11-22, user rule):
+ * the user is already a second-year 专科 student, so training-institution
+ * marketing （机构测评 / 选机构软文） and 高考择校 content (teaching 高考
+ * students how to pick a 大专） are hidden from the homepage. Applied both
+ * at ingest and on read, so cached items disappear immediately. The two
+ * items the user named both live under gaokao.eol.cn — the 高考 section —
+ * which is the most reliable signal; title patterns cover training
+ * marketing wherever it appears.
+ */
+export function isJiangxiHomepageExcluded(it: { title: string; url: string }): boolean {
+  if (/gaokao\.eol\.cn/i.test(it.url)) return true;
+  if (/机构怎么选|机构.*评测|评测.*机构|培训机构|本地化教研|辅导班|培训班/.test(it.title)) return true;
+  if (/择校/.test(it.title) && /大专/.test(it.title) && !/专升本考试|专升本报名/.test(it.title)) return true;
+  return false;
+}
+
 async function loadJiangxi(ctx: Ctx, force: boolean): Promise<{ items: JiangxiItem[]; asOf: string }> {
   if (!force) {
     const cached = await readCache<JiangxiItem[]>(ctx, "jiangxi:all:v2", JIANGXI_TTL_MS);
@@ -1358,6 +1419,8 @@ async function loadJiangxi(ctx: Ctx, force: boolean): Promise<{ items: JiangxiIt
       // Only 江西普通高校专升本 — drop 成人高考/自考/专套本 noise by title.
       if (!/专升本/.test(it.title)) return false;
       if (/成人高考|自学考试|自考/.test(it.title) && !/普通高校专升本|普通专升本/.test(it.title)) return false;
+      // 2026-11-22: 培训机构营销与高考择校内容不进首页（见 isJiangxiHomepageExcluded）。
+      if (isJiangxiHomepageExcluded(it)) return false;
       return true;
     })
     .sort((a, b) => {
@@ -1790,6 +1853,112 @@ const PINNED_VISA_KEY = "overseas:visa:pinned:v4";
 const PINNED_VISA_MAX_AGE_MS = 365 * 24 * 3600 * 1000;
 
 /**
+ * Homepage rules for the overseas column (2026-11-22, user rules):
+ * 1) Applicability before pinning: an item that clearly does not apply to
+ *    this user — eligibility bachelor_only, or text that explicitly says so
+ *    （不适用于我 / 不含信息安全技术应用 / 只限有学士学位者） — leaves the
+ *    homepage entirely (pinned zone and rotating list alike). This removes
+ *    the NZ post-study expansion, the UK Graduate-visa shortening and the
+ *    Korean technical pilot from the homepage; they stay in the code as
+ *    curated items and can be restored on request.
+ * 2) One event, one entry: exact duplicates (same normalized title, source
+ *    and day) collapse, and items sharing an event signature (same country +
+ *    nationality + overlapping topic tokens + same distinctive number,
+ *    published within 7 days) keep a single entry — the official one, else
+ *    the newest. This collapses the duplicated Times of India piece on the
+ *    64.1% Indian NZ student-visa approval rate (same title/source/date
+ *    twice) together with the other outlets' retellings of that same data
+ *    release.
+ * Applied at ingest, at assembly, and on read, so cached payloads are
+ * cleaned immediately and no refresh can bring a removed item back.
+ */
+export function isClearlyNotApplicableToUser(it: OverseasItem): boolean {
+  if (it.eligibility === "bachelor_only") return true;
+  const text = `${it.whoApplies ?? ""} ${(it.points ?? []).join(" ")}`;
+  return /不适用于我|不含信息安全技术应用|专科毕业生不在|只限有学士学位者|只限学位毕业生/.test(text);
+}
+
+export function overseasExactDupKey(it: { title: string; source: string; publishedAt: string | null }): string {
+  const day = it.publishedAt ? it.publishedAt.slice(0, 10) : "";
+  return `${it.title.replace(/[\s\p{P}]/gu, "").slice(0, 40)}|${it.source}|${day}`;
+}
+
+export function overseasEventSignature(it: OverseasItem): {
+  country: string;
+  nat: string;
+  topics: Set<string>;
+  num: string;
+} | null {
+  const hay = `${it.title} ${it.whatChanged ?? ""}`;
+  const nat = /indian|india|印度/i.test(hay) ? "india" : /china|chinese|中国/i.test(hay) ? "china" : "";
+  const topics = new Set<string>();
+  if (/approv|通过率|获批|approval/i.test(hay)) topics.add("approval");
+  if (/work visa|工作签证/i.test(hay)) topics.add("workvisa");
+  if (/post-study|post study|毕业后工签|毕业后工作签证/i.test(hay)) topics.add("pswv");
+  if (/graduate visa|毕业生签证/i.test(hay)) topics.add("gradvisa");
+  if (/scholarship|奖学金/i.test(hay)) topics.add("scholarship");
+  if (/tuition|学费/i.test(hay)) topics.add("tuition");
+  if (/refus|拒签/i.test(hay)) topics.add("refusal");
+  if (/student visa|学生签证/i.test(hay)) topics.add("studentvisa");
+  const num = hay.match(/(\d+(?:\.\d+)?)\s*%/)?.[1] ?? "";
+  if (topics.size === 0 && !num) return null;
+  return { country: it.country, nat, topics, num };
+}
+
+export function applyOverseasHomepageRules(items: OverseasItem[]): OverseasItem[] {
+  // 1) Exact duplicates: same title + source + day.
+  const seenExact = new Set<string>();
+  const deduped = items.filter((it) => {
+    const k = overseasExactDupKey(it);
+    if (seenExact.has(k)) return false;
+    seenExact.add(k);
+    return true;
+  });
+  // 2) Same event: same country + nationality + overlapping topics + same
+  //    distinctive number (or none), published within 7 days. Keep the
+  //    official entry, else the newest.
+  const sigs = deduped.map((it) => overseasEventSignature(it));
+  const kept: boolean[] = deduped.map(() => true);
+  const timeOf = (it: OverseasItem) => (it.publishedAt ? new Date(it.publishedAt).getTime() : 0);
+  for (let i = 0; i < deduped.length; i++) {
+    if (!kept[i] || !sigs[i]) continue;
+    for (let j = i + 1; j < deduped.length; j++) {
+      if (!kept[j] || !sigs[j]) continue;
+      const a = sigs[i]!;
+      const b = sigs[j]!;
+      if (a.country !== b.country || a.nat !== b.nat) continue;
+      if (a.num && b.num && a.num !== b.num) continue;
+      const inter = [...a.topics].filter((t) => b.topics.has(t));
+      if (inter.length === 0) continue;
+      // "studentvisa" alone is too generic to prove one event (many distinct
+      // stories share it) — a merge also needs a distinctive shared topic
+      // (approval / workvisa / …) or the same distinctive number.
+      const distinctive = inter.some((t) => t !== "studentvisa") || (a.num !== "" && a.num === b.num);
+      if (!distinctive) continue;
+      const subset =
+        [...a.topics].every((t) => b.topics.has(t)) || [...b.topics].every((t) => a.topics.has(t));
+      if (!subset) continue;
+      const ti = timeOf(deduped[i]!);
+      const tj = timeOf(deduped[j]!);
+      if (ti && tj && Math.abs(ti - tj) > 7 * 24 * 3600 * 1000) continue;
+      // Same event: keep official, else newest.
+      const dropJ =
+        deduped[j]!.official && !deduped[i]!.official
+          ? false
+          : deduped[i]!.official && !deduped[j]!.official
+            ? true
+            : tj <= ti;
+      if (dropJ) kept[j] = false;
+      else kept[i] = false;
+      if (!kept[i]) break;
+    }
+  }
+  const merged = deduped.filter((_, i) => kept[i]);
+  // 3) Applicability before pinning: clearly-not-applicable items leave.
+  return merged.filter((it) => !isClearlyNotApplicableToUser(it));
+}
+
+/**
  * Merge the fixed visa zone: curated items always win; previously pinned
  * discoveries persist across refreshes; a newer item on the same
  * country+topic supersedes the older one; non-curated items older than a
@@ -1808,6 +1977,9 @@ async function mergePinnedVisaItems(ctx: Ctx, discovered: OverseasItem[]): Promi
   const fresh = [...byUrl.values()].filter((it) => {
     // Blocked hosts (third-party explainers, no official original) never pin.
     if (PINNED_VISA_BLOCKED_HOSTS.some((h) => it.url.includes(h) || (it.readUrl ?? "").includes(h))) return false;
+    // 2026-11-22: applicability comes before pinning — a visa item that
+    // clearly does not apply to this user never stays pinned, curated or not.
+    if (isClearlyNotApplicableToUser(it)) return false;
     if (curatedUrls.has(it.url)) return true;
     // Retellings of events a curated item already covers never stay pinned.
     const text = `${it.title} ${it.whatChanged ?? ""}`;
@@ -2073,6 +2245,7 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
     }),
   );
   const seen = new Set<string>();
+  const seenTitleDay = new Set<string>();
   const cutoff = Date.now() - 150 * 24 * 3600 * 1000;
   const deduped = raw
     .filter((it) => {
@@ -2080,6 +2253,11 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
       it.url = direct;
       if (isGnRelay(direct) || isBingClick(direct) || seen.has(direct)) return false;
       seen.add(direct);
+      // 2026-11-22: same title + source + day arriving under different URLs
+      // is still one item (the Times of India 64.1% piece arrived twice).
+      const dupKey = overseasExactDupKey(it);
+      if (seenTitleDay.has(dupKey)) return false;
+      seenTitleDay.add(dupKey);
       if (it.publishedAt && new Date(it.publishedAt).getTime() < cutoff) return false;
       // The 2026-11-16 D/S vacatur is one event: every outlet's retelling is
       // dropped here and the column carries the single curated Yale OISS
@@ -2292,14 +2470,18 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
     const tb = b.publishedAt ? new Date(b.publishedAt).getTime() : 0;
     return tb - ta;
   });
+  // 2026-11-22: homepage rules — exact duplicates and same-event retellings
+  // collapse to one entry, and items that clearly do not apply to this user
+  // leave the column (pinned zone included; see applyOverseasHomepageRules).
+  const cleaned = applyOverseasHomepageRules(items);
   // Fixed visa zone: visa-classified discoveries join the pinned store and
   // stay across refreshes; the curated items (D/S ruling, NZ PSWV, UK
   // Graduate visa, Korea reform plan, Singapore work-pass thresholds)
   // always anchor it. Pinned items are removed from the rotating list so
   // each appears exactly once.
-  const pinned = await mergePinnedVisaItems(ctx, items.filter((it) => it.visa));
+  const pinned = await mergePinnedVisaItems(ctx, cleaned.filter((it) => it.visa));
   const pinnedUrls = new Set(pinned.map((it) => it.url));
-  const rotating = items.filter((it) => !pinnedUrls.has(it.url));
+  const rotating = cleaned.filter((it) => !pinnedUrls.has(it.url));
   const all = [...pinned, ...rotating];
 
   const bounded: Record<string, OverseasEnrichEntry> = {};
@@ -2834,7 +3016,10 @@ export const Actions = {
     }),
     async handler(ctx, args) {
       const loaded = await loadLearning(ctx, args.force);
-      const items = loaded.items.map(correctLearningItem);
+      // 2026-11-22: homepage shows only what the user can still join, watch
+      // a replay of, or start learning directly (see isLearningHomepageItem);
+      // ended events and other-stage items are filtered from cached data too.
+      const items = loaded.items.map(correctLearningItem).filter(isLearningHomepageItem);
       const asOf = loaded.asOf;
       // "可报名" list: only deadlines from today (Asia/Shanghai) through the
       // next 30 days — expired opportunities are excluded here and badged
@@ -2967,7 +3152,9 @@ export const Actions = {
     }),
     async handler(ctx, args) {
       const { items, asOf } = await loadJiangxi(ctx, args.force);
-      const current = items.filter((it) => !it.isReference);
+      // 2026-11-22: 培训机构营销与高考择校内容不进首页（也过滤已缓存的条目）。
+      const visible = items.filter((it) => !isJiangxiHomepageExcluded(it));
+      const current = visible.filter((it) => !it.isReference);
       const covers = (tag: JiangxiTag) => current.some((it) => it.tag === tag);
       const pending = [
         { label: "2028 年报名通知", status: covers("报名") ? "已有 2028 年消息，见下方" : "待公布" },
@@ -2975,13 +3162,13 @@ export const Actions = {
         { label: "2028 年专业对照表", status: covers("专业对照") ? "已有 2028 年消息，见下方" : "待公布" },
         { label: "2028 年招生简章", status: covers("招生简章") ? "已有 2028 年消息，见下方" : "待公布" },
       ];
-      return { items, pending, asOf, hasTodayUpdate: items.some((it) => isTodayShanghai(it.publishedAt)) };
+      return { items: visible, pending, asOf, hasTodayUpdate: visible.some((it) => isTodayShanghai(it.publishedAt)) };
     },
   }),
 
   getOverseas: defineAction({
     description:
-      "Returns decision-changing overseas opportunities and policy changes for a Chinese 专科 (diploma) student across the US, New Zealand, Singapore, Vietnam, Japan, South Korea, Ireland and the UK: what changed, who it applies to and when it takes effect, with the original university/government link. Student-visa and post-study-work-visa changes carry visa=true and live in a fixed zone (pinned=true): they persist across daily refreshes and are only removed when superseded by a newer item on the same topic or expired. Bachelor-only items are flagged bachelor_only (hidden by default in the rotating list; pinned visa items stay visible with their badge); unclear eligibility stays 'unclear' and is never presented as diploma-eligible. Immigration items carry an identityLabel.",
+      "Returns decision-changing overseas opportunities and policy changes for a Chinese 专科 (diploma) student across the US, New Zealand, Singapore, Vietnam, Japan, South Korea, Ireland and the UK: what changed, who it applies to and when it takes effect, with the original university/government link. Student-visa and post-study-work-visa changes carry visa=true and live in a fixed zone (pinned=true): they persist across daily refreshes and are only removed when superseded by a newer item on the same topic or expired. Applicability comes before pinning (2026-11-22): items that clearly do not apply to this user — bachelor_only, or text stating so — are removed from the homepage, pinned or not. Same-event items collapse to one entry (exact duplicates by title+source+day, and same-event retellings by country+topic+number). Unclear eligibility stays 'unclear' and is never presented as diploma-eligible. Immigration items carry an identityLabel.",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -2990,7 +3177,10 @@ export const Actions = {
     }),
     async handler(ctx, args) {
       const { items, asOf } = await loadOverseas(ctx, args.force);
-      return { items, asOf, hasTodayUpdate: items.some((it) => isTodayShanghai(it.publishedAt)) };
+      // 2026-11-22: homepage rules also filter already-cached items, so the
+      // duplicates and not-applicable pinned entries disappear immediately.
+      const visible = applyOverseasHomepageRules(items);
+      return { items: visible, asOf, hasTodayUpdate: visible.some((it) => isTodayShanghai(it.publishedAt)) };
     },
   }),
 
