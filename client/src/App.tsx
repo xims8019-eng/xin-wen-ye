@@ -518,7 +518,7 @@ function AiLearningNote() {
       </p>
       <p className="mt-2">
         <span className="font-medium text-[var(--text)]">复核记录：</span>
-        Coursera 博客《Introducing AI Series on Coursera》背后是 Coursera Plus 付费订阅（$49/月，7 天试用要先绑支付信息，属限时试听），没有指向某一门可直接进入、免费、带中文字幕的具体课程，且系列面向已有本领域工作经验的在职专业人士、不适合专科在读入门，故不纳入「AI 学习」筛选；它在「随时可学」里的原有位置保留不动。吴恩达《AI for Everyone》仅有 B 站非官方搬运合集，正版 Coursera 页未能核实到免费旁听入口与中文字幕说明，本次也不纳入。
+        Coursera 博客《Introducing AI Series on Coursera》背后是 Coursera Plus 付费订阅（$49/月，7 天试用要先绑支付信息，属限时试听），没有指向某一门可直接进入、免费、带中文字幕的具体课程，且系列面向已有本领域工作经验的在职专业人士、不适合专科在读入门。已从「随时可学」和「AI 学习」中移除该博客，因为它没有提供已核实可免费学习的具体课程入口。吴恩达《AI for Everyone》仅有 B 站非官方搬运合集，正版 Coursera 页未能核实到免费旁听入口与中文字幕说明，本次也不纳入。
       </p>
     </div>
   );
