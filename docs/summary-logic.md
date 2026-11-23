@@ -135,3 +135,7 @@
 | Zod 的 `learningEnrichSchema` / `jiangxiEnrichSchema` / `overseasEnrichSchema` / 详情的 `{ introZh, points }` schema | 可直接复用为 JSON Schema 传给模型，或保留 Zod 做返回校验 |
 
 模型只需要做翻译提炼和分类，不需要联网，也不需要很大的模型；关键是提示词里的「只依据摘要、不猜正文」约束要原样保留。
+
+## 海外签证固定区：纯统计新闻不置顶（2026-11-23r 新增）
+
+固定区只收政策变化。`isVisaStatisticsOnlyNews`（server/src/actions.ts）对 kind=news 条目做确定性判定：带签证统计信号（申请量/拒签率等数据升降）或仅提案信号，且没有已落地的规则变更、没有带生效标记的完整生效日期 → 不置顶。kind=policy 与人工政策卡永不命中；带真实变更与生效日期的新闻仍可置顶。置顶存储键为 `overseas:visa:pinned:v11`。

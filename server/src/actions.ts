@@ -3065,7 +3065,7 @@ const CURATED_VISA_URLS = new Set(CURATED_VISA_ITEMS.map((it) => it.url));
  */
 const PINNED_VISA_BLOCKED_HOSTS = ["dayonekorea.com", "gistreel.com"];
 
-const PINNED_VISA_KEY = "overseas:visa:pinned:v10";
+const PINNED_VISA_KEY = "overseas:visa:pinned:v11";
 /** Non-curated pinned visa items expire this long after their publish date. */
 const PINNED_VISA_MAX_AGE_MS = 365 * 24 * 3600 * 1000;
 
@@ -3310,6 +3310,62 @@ function sameOverseasEvent(a: OverseasItem, b: OverseasItem): boolean {
 }
 
 /**
+ * Statistics-only visa news never pins (user rule, 2026-11-23): the fixed
+ * zone is for policy CHANGES — a rule that actually moved, with what
+ * changed and when it takes effect. A kind=news item whose substance is
+ * visa DATA moving (application volumes, refusal / approval rates going
+ * up or down) changes no rule, and neither does an item whose only
+ * forward-looking content is a measure merely proposed / warned of, with
+ * no enacted change and no effective date: the Times of India piece on UK
+ * student-visa applications plunging 31% in October 2026 — statistics
+ * plus a proposed £925 levy — reached the public site's fixed zone on
+ * 2026-11-23 because every earlier filter passed it (the Muse pool never
+ * carried it; the Muse zone stayed at exactly 4). Deterministic and
+ * text-only, over the same title + whatChanged + points text the other
+ * pinned filters use. kind=policy items are NEVER affected, and a news
+ * item carrying an enacted rule change (a fee / threshold / duration /
+ * requirement actually rising, falling, being cancelled or tightened) or
+ * a stated effective date still pins. An effective date counts only as a
+ * FULL date carrying an effective marker （…日起 / …生效 / from /
+ * effective / takes effect + date): a statistics month ("October",
+ * 「10月份」) is not an effective date, and neither is publishedAt.
+ */
+export function isVisaStatisticsOnlyNews(it: OverseasItem): boolean {
+  if (it.kind !== "news") return false;
+  const text = `${it.title} ${it.whatChanged ?? ""} ${it.points.join(" ")}`;
+  // A signal is required: visa statistics moving, or a proposal-only item.
+  const statsZh =
+    /(申请量|申请人数|申请数|拒签率|获签率|获批率|批准率|通过率)/.test(text) &&
+    /(下降|上升|增长|减少|同比|环比|%|％)/.test(text);
+  const statsEn =
+    /\b(visa applications?|visa refusals?|visa approvals?|visa grants?|application volumes?)\b/i.test(text) &&
+    /(%|\b(?:fell|fall|falls|falling|plunge[sd]?|drop(?:s|ped)?|rose|rise[sn]?|risen|declin\w+|increas\w+|slump\w*|surg\w+)\b)/i.test(text);
+  const proposalOnly = /(\bpropos\w+\b|\bwarn\w*\s+of\b|拟议|提议|提案)/i.test(text);
+  if (!statsZh && !statsEn && !proposalOnly) return false;
+  // An enacted rule change disqualifies: a fee / threshold / duration /
+  // requirement actually moving. A merely proposed one does not count.
+  const ruleChangeZh =
+    /(签证费|申请费|费用|门槛|期限|时长|要求|费率|收费|薪资|存款|保证金|配额).{0,12}(上调|下调|提高|降低|调高|调低|取消|废除|收紧|放宽|缩短|延长|调整)/.test(text) ||
+    /(上调|下调|提高|降低|取消|废除|收紧|放宽|缩短|延长|新设|新增).{0,12}(签证费|申请费|费用|门槛|期限|时长|要求|签证|工签|学签)/.test(text);
+  const ruleChangeEn =
+    /\b(?:cuts?|cutting|rais\w+|increas\w+|reduc\w+|lower\w+|abolish\w+|scrap\w+|tighten\w+|extend\w+|shorten\w+|introduc\w+|impos\w+)\b[^.]{0,60}\b(?:visa|fees?|threshold|requirements?|levy|cap|months?|years?|weeks?)\b/i.test(text) ||
+    /\b(?:fees?|threshold|requirements?|levy|cap|salary)\b[^.]{0,40}\b(?:ris\w+|increas\w+|rais\w+|cut|reduc\w+|lower\w+|abolish\w+|scrap\w+|tighten\w+)\b/i.test(text);
+  if (ruleChangeZh || ruleChangeEn) return false;
+  // A stated effective date disqualifies: full date + effective marker.
+  const months = "january|february|march|april|may|june|july|august|september|october|november|december";
+  const effectiveZh =
+    /\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日\s*(起|生效|实施|执行)/.test(text) ||
+    /\d{4}-\d{1,2}-\d{1,2}\s*(起|生效|实施|执行)/.test(text) ||
+    /(生效|实施|执行)\s*(日期|日)?\s*[:：]?\s*\d{4}-\d{1,2}-\d{1,2}/.test(text);
+  const effectiveEn = new RegExp(
+    `\\b(?:from|effective|takes? effect|in force from)\\b[^.;]{0,40}?\\b(?:\\d{1,2}\\s+(?:${months})\\s+\\d{4}|(?:${months})\\s+\\d{1,2},?\\s+\\d{4}|\\d{4}-\\d{2}-\\d{2})`,
+    "i",
+  ).test(text);
+  if (effectiveZh || effectiveEn) return false;
+  return true;
+}
+
+/**
  * Merge the fixed visa zone: curated items always win; previously pinned
  * discoveries persist across refreshes; a newer item on the same
  * country+topic supersedes the older one; non-curated items older than a
@@ -3353,6 +3409,12 @@ async function mergePinnedVisaItems(ctx: Ctx, discovered: OverseasItem[]): Promi
     // was auto-pinned by one enrichment run's visa classification, but a
     // petition changes no rule and never enters the fixed zone.
     if (/(请愿|联署|抗议|petition|protest)/i.test(text)) return false;
+    // Statistics-only visa news never pins (user rule, 2026-11-23): visa
+    // data moving — or a measure merely proposed — with no enacted rule
+    // change and no effective date is not a policy change. Curated items
+    // already returned true above and are kind=policy besides, so this
+    // check only ever reaches non-curated discoveries.
+    if (isVisaStatisticsOnlyNews(it)) return false;
     // Retellings of events a curated item already covers never stay pinned.
     if (
       isDsRulingEventText(text) ||
