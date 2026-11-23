@@ -676,6 +676,38 @@ function sleepMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// --- Model-enrichment pacing (user rule, 2026-11-23) -----------------------
+// The free Gemini tier behind the self-hosted copy allows ~15 model calls
+// per minute; a refresh that fired every column's batches in parallel peaked
+// at 23 calls/minute and got HTTP 429s (the daily quota was barely touched —
+// it is the per-minute cap that binds). So enrichment batches now run ONE AT
+// A TIME with a pause between batches: a batch call plus a 5s pause keeps a
+// refresh at roughly 12 calls/minute at most, under the cap. A batch that
+// still hits a 429 is retried once after an 8s backoff; if that also fails,
+// the caller's existing split-the-batch-in-half retry takes over. Batch size
+// (5 per batch, 3 for overseas), the per-item enrichment caches and each
+// call's timeout are unchanged, and every column still writes its own cache
+// the moment it finishes — serialization never delays a finished column's
+// cache write behind another column.
+const ENRICH_BATCH_GAP_MS = 5000;
+const ENRICH_429_BACKOFF_MS = 8000;
+
+function isRateLimitError(e: unknown): boolean {
+  const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+  return /\b429\b/.test(msg) || /too many requests/i.test(msg) || /rate.?limit/i.test(msg);
+}
+
+/** Runs one model call; on a 429, waits and retries the same call once. */
+async function completeEnrichment<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (e) {
+    if (!isRateLimitError(e)) throw e;
+    await sleepMs(ENRICH_429_BACKOFF_MS);
+    return await call();
+  }
+}
+
 /**
  * Opens a resolved publisher URL to confirm it really is the publisher's
  * article page: fails only on definitive evidence — HTTP 404/410, a final
@@ -1402,12 +1434,16 @@ async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: Learning
   // Small batches: a 10-item call measurably exceeded the inference timeout
   // (a 6-item call takes ~75s), which is why enrichment results kept being
   // lost. 5 items per batch, and a failed batch retries once as two halves.
+  // Since 2026-11-23 the batches (and the two halves) run SERIALLY with a
+  // pause between calls — see the pacing note at completeEnrichment.
   const enrichBatch = async (batch: LearningCandidate[], offset: number): Promise<void> => {
     try {
-      const result = await completeInference(ctx, enrichPrompt(batch, offset), {
-        schema: learningEnrichSchema,
-        timeout_secs: 110,
-      });
+      const result = await completeEnrichment(() =>
+        completeInference(ctx, enrichPrompt(batch, offset), {
+          schema: learningEnrichSchema,
+          timeout_secs: 110,
+        }),
+      );
       result.items.forEach((r, j) => {
         const gid = r.id >= offset && r.id < offset + batch.length ? r.id : offset + j;
         if (gid < offset + batch.length && !byId.has(gid)) byId.set(gid, r);
@@ -1416,16 +1452,18 @@ async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: Learning
       await recordEnrichError(e, offset);
       if (batch.length > 2) {
         const mid = Math.ceil(batch.length / 2);
-        await Promise.all([
-          enrichBatch(batch.slice(0, mid), offset),
-          enrichBatch(batch.slice(mid), offset + mid),
-        ]);
+        await enrichBatch(batch.slice(0, mid), offset);
+        await sleepMs(ENRICH_BATCH_GAP_MS);
+        await enrichBatch(batch.slice(mid), offset + mid);
       }
     }
   };
   const batches: LearningCandidate[][] = [];
   for (let s = 0; s < fresh.length; s += 5) batches.push(fresh.slice(s, s + 5));
-  await Promise.all(batches.map((batch, bi) => enrichBatch(batch, bi * 5)));
+  for (const [bi, batch] of batches.entries()) {
+    if (bi > 0) await sleepMs(ENRICH_BATCH_GAP_MS);
+    await enrichBatch(batch, bi * 5);
+  }
 
   // Fold this run's successful results into the persistent enrichment store.
   let newEnriched = 0;
@@ -2057,7 +2095,8 @@ async function loadJiangxi(ctx: Ctx, force: boolean): Promise<{ items: JiangxiIt
       })
       .join("\n");
     try {
-      const result = await completeInference(ctx, 
+      const result = await completeEnrichment(() =>
+        completeInference(ctx, 
         `你在为一位江西大二专科生（专业：信息安全技术应用，预计 2028 年毕业、2028 年参加普通高校专升本）整理「江西专升本」栏目。逐条判断：\n` +
           `- keep：是否确为江西省普通高校专升本的通知/政策/招生信息。成人高考、自考、培训机构广告、机构测评软文、面向高考生选大专的择校指南 keep=false。\n` +
           `- tag：报名 / 考试科目 / 专业对照 / 招生简章 / 录取 / 其他，按内容选最贴切的一个——分数线、录取控制线、投档线、录取结果归「录取」；报名流程、报名通知、报考归「报名」；考试时间、科目安排、准考证归「考试科目」。\n` +
@@ -2066,6 +2105,7 @@ async function loadJiangxi(ctx: Ctx, force: boolean): Promise<{ items: JiangxiIt
           `- relevance：一句中文说明与这位学生的关系，必须依据本条自己的标题/摘要写，每条各不相同，不要多条共用同一句模板。摘要或标题明确涉及信息安全/计算机类专业时说明直接关系；只是全省通用通知时，说明这是全体考生都要看的通用事项；不要编造专业对照结论。\n` +
           `- actionNeeded：一句中文说明他现在需要做什么。往年（2028 年之前）的材料，写明这是备考参考、现在只需了解科目与要求；不要编造报名日期或截止时间。\n\n${listing}`,
         { schema: jiangxiEnrichSchema, timeout_secs: 110 },
+        ),
       );
       const dropped = new Set<string>();
       result.items.forEach((r, j) => {
@@ -2095,7 +2135,12 @@ async function loadJiangxi(ctx: Ctx, force: boolean): Promise<{ items: JiangxiIt
   };
   const batches: FeedItem[][] = [];
   for (let s = 0; s < fresh.length; s += 5) batches.push(fresh.slice(s, s + 5));
-  await Promise.all(batches.map((b, bi) => enrichBatch(b, bi * 5)));
+  // Serial, paced (2026-11-23): one batch at a time with a pause between
+  // batches — see the pacing note at completeEnrichment.
+  for (const [bi, b] of batches.entries()) {
+    if (bi > 0) await sleepMs(ENRICH_BATCH_GAP_MS);
+    await enrichBatch(b, bi * 5);
+  }
   const droppedUrls = new Set((await readCacheStale<string[]>(ctx, "jiangxi:dropped:v1"))?.data ?? []);
 
   const items: JiangxiItem[] = [];
@@ -3451,7 +3496,8 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
       })
       .join("\n");
     try {
-      const result = await completeInference(ctx, 
+      const result = await completeEnrichment(() =>
+        completeInference(ctx, 
         `你在为一位中国专科（大专）学生（信息安全技术应用专业，预计 2028 年毕业）筛选「海外机会与政策变化」。只保留会改变他决策的消息：某校开始接受中国大专学历申请、学分认定/转学分变化、面向专科生的奖学金开放、学生签证要求调整、影响留学生的安全提醒。逐条判断：\n` +
           `- keep：符合上面任一类才 true。留学中介广告、论坛帖子、泛泛的留学介绍、与专科生无关的普通新闻 keep=false。评论、观点、社论类文章（opinion/commentary/editorial）不是政策变化本身，哪怕评论的正是学生签证政策，keep=false。只面向其他国家或地区申请人（例如仅面向非洲申请人）、与中国学生无关的条目 keep=false。注意：标题里「X国留学生／X国申请人」的 X 是申请人国籍，不是留学目的地——例如《越南留学生如何在加拿大申请留学》讲的是越南籍申请人，目的地是加拿大，与中国申请人无关，keep=false；反过来讲去越南留学、越南学生签证规则的条目，越南是目的地，不要按申请人国籍误判。跟踪国家只有：美国、新西兰、新加坡、越南、日本、韩国、爱尔兰、英国；其他国家 keep=false。\n` +
           `- country：从这八个国家里选一个最贴切的中文名；实在判断不了填「其他」。\n` +
@@ -3469,6 +3515,7 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
           `- 岗位类（kind=job）再填 location（工作地点）、remoteFromChina（能否在中国境内远程参加，摘要没写填 null）、eduReq（学历要求）、expReq（经验要求）、acceptsOverseas（是否接受境外申请，没写填 null）、visaSupport（雇主明确提供签证支持填 yes，明确不提供填 no，没写填 unstated）。\n` +
           `- 政策类（kind=policy）再填 policyStatus：已生效填 enacted，只是提案/计划/拟议填 proposal，没写清填 unstated。\n\n${listing}`,
         { schema: overseasEnrichSchema, timeout_secs: 110 },
+        ),
       );
       result.items.forEach((r, j) => {
         const idx = r.id >= offset && r.id < offset + batch.length ? r.id : offset + j;
@@ -3518,15 +3565,19 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
       if (batch.length > 1) {
         const mid = Math.ceil(batch.length / 2);
         await enrichBatch(batch.slice(0, mid), offset);
+        await sleepMs(ENRICH_BATCH_GAP_MS);
         await enrichBatch(batch.slice(mid), offset + mid);
       }
     }
   };
   // Batches of 3, run sequentially: the 08:02 timeout came from larger
   // parallel batches; small sequential batches are slower but finish.
+  // Since 2026-11-23 they are also paced with a pause between batches —
+  // see the pacing note at completeEnrichment.
   const batches: FeedItem[][] = [];
   for (let s = 0; s < fresh.length; s += 3) batches.push(fresh.slice(s, s + 3));
   for (const [bi, b] of batches.entries()) {
+    if (bi > 0) await sleepMs(ENRICH_BATCH_GAP_MS);
     await enrichBatch(b, bi * 3);
   }
 
@@ -5085,7 +5136,14 @@ export const Actions = {
       // deadline-sensitive step, so it must not queue behind nine sequential
       // category fetches (that ordering is what starved it of inference time).
       await loadLearning(ctx, true);
-      await Promise.all([loadJiangxi(ctx, true), loadOverseas(ctx, true), loadMyWorld(ctx, true), loadHotLists(ctx, true)]);
+      // The other two model-enriched columns also run one after another,
+      // never in parallel with each other (2026-11-23 pacing — see
+      // completeEnrichment); 我关注的世界 and the hot lists make no model
+      // calls and still load together. Every column keeps writing its own
+      // cache the moment it finishes.
+      await loadJiangxi(ctx, true);
+      await loadOverseas(ctx, true);
+      await Promise.all([loadMyWorld(ctx, true), loadHotLists(ctx, true)]);
       await Promise.all(CATEGORIES.map((cat) => loadCategory(ctx, cat.id, true)));
       const db = ctx.db;
       const subs = await db.select().from(schema.subscriptions);
