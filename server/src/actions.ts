@@ -76,6 +76,23 @@ async function fetchText(url: string, headers?: Record<string, string>): Promise
 }
 
 function decodeEntities(s: string): string {
+  // Iterate to a fixed point (max 3 passes): feeds double-encode entities
+  // (`&amp;#160;` in the raw XML), and a single pass decodes the `&amp;`
+  // LAST, leaving a literal `&#160;` behind in the text (user rule,
+  // 2026-11-23 — the m-round decode fixed titles but a Coursera item's
+  // points still carried `&#160;`). Repeated passes collapse
+  // `&amp;#160;` → `&#160;` → the real character; ordinary text is
+  // unchanged after the first pass and the loop stops.
+  let out = s;
+  for (let pass = 0; pass < 3; pass++) {
+    const next = decodeEntitiesOnce(out);
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
+function decodeEntitiesOnce(s: string): string {
   return s
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
     .replace(/&lt;/g, "<")
@@ -132,6 +149,35 @@ function truncateAtBoundary(text: string, max: number): string {
   // Chinese text has no spaces: a character boundary IS a word-safe cut.
   if (!/[A-Za-z]/.test(cut.slice(-12))) return cut.trim();
   return cut.slice(0, Math.floor(max * 0.7)).trim();
+}
+
+/**
+ * Build a display line out of COMPLETE sentences only (user rule,
+ * 2026-11-23): the m-round boundary truncation still cut a Coursera
+ * relevance line mid-SENTENCE ("…but many professionals struggle" —
+ * a whole word, but half a thought). This takes whole sentences from
+ * the item's own text until `max` is reached; the first sentence is
+ * always kept whole, even when it alone exceeds `max` (a long complete
+ * sentence beats a short broken one), and only a pathological
+ * paragraph-length "sentence" falls back to boundary truncation.
+ * Deterministic — no model, no translation: an English source yields a
+ * complete English sentence, never a fabricated Chinese one.
+ */
+function completeSentences(text: string, max: number): string {
+  const t = text.trim().replace(/\s+/g, " ");
+  if (t.length <= max) return t;
+  const sentences = t.match(/[^。！？.!?；;]+[。！？.!?；;]+["'"“”‘’」』）)]*|[^。！？.!?；;]+$/g) ?? [t];
+  let out = "";
+  for (const s of sentences) {
+    const trimmed = s.trim();
+    if (!trimmed) continue;
+    if (out && out.length + trimmed.length > max) break;
+    out += trimmed;
+    if (out.length >= max) break;
+  }
+  if (out) return out;
+  const first = (sentences[0] ?? t).trim();
+  return first.length <= 260 ? first : truncateAtBoundary(first, 260);
 }
 
 /**
@@ -931,6 +977,14 @@ interface EnrichEntry {
  * News-Press NOW St. Joseph item: "St. Joseph School District juniors
  * and seniors can apply for a new scholarship…", high-school juniors
  * and seniors earning college credit while still in high school).
+ *
+ * 2026-11-23 follow-up (three more named cases): the wrong-stage
+ * signals are now matched against title + summary + points +
+ * audienceStage together — the Santa Cruz County middle-schools e-bike
+ * safety class (middle school stage), the 「多所高校不给研究生宿舍」
+ * discussion (master's stage, bare 研究生 in the title), and the HKU
+ * robotics undergraduate item whose JUPAS / 中六 signals sit in its
+ * summary and points rather than its title.
  */
 function isLearningNotActionable(
   item: {
@@ -1009,6 +1063,20 @@ function isLearningNotActionable(
   // survived only because its title's 招生章程 read as an actionable
   // signal and 专硕 never matched the 硕士 patterns above).
   if (/(专硕|学硕)/.test(text)) return true;
+  // Wrong-stage signals across ALL of the item's own text (user rule,
+  // 2026-11-23): the stage is not always in the title — the HKU
+  // robotics undergraduate item states JUPAS / 中六 only in its summary
+  // and points, the Santa Cruz e-bike safety class is for "middle
+  // schools", and the dorm discussion 「多所高校不给研究生宿舍」 is
+  // master's-stage by its title's bare 研究生 without any 招生 wording
+  // (the title-only patterns above all missed one of the three). Any
+  // hit in title + summary + points + audienceStage excludes the item:
+  // middle school(s), 中小学， 初中， 高中生， 中六， JUPAS, DSE,
+  // 研究生 / 硕士研究生.
+  const stageText = `${text} ${audienceStage ?? ""}`;
+  if (/\bmiddle schools?\b/i.test(stageText)) return true;
+  if (/中小学|初中|高中生|中六|研究生/.test(stageText)) return true;
+  if (/\bJUPAS\b/i.test(stageText) || /\bDSE\b/i.test(stageText)) return true;
   if (audienceStage && /小学|初中|中小学|高中/.test(audienceStage)) return true;
   if (audienceStage && /(博士|硕士|专硕|学硕)/.test(audienceStage) && !/不限|专科|高职|大学生|本科/.test(audienceStage)) return true;
   // Internship postings live in category 3 （海外实习、工作与签证） — the
@@ -1410,7 +1478,10 @@ async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: Learning
     )
       continue;
     const hasSummary = !!(it.summary && it.summary.trim().length > 0);
-    const fallbackSummaryZh = hasSummary ? truncateAtBoundary(it.summary as string, 90) : null;
+    // Unenriched fallback (user rule, 2026-11-23): whole sentences from
+    // the item's own source summary — never a mid-sentence cut, and
+    // never a fabricated translation when no model pass ran.
+    const fallbackSummaryZh = hasSummary ? completeSentences(it.summary as string, 110) : null;
     const host = hostOf(it.url);
     let officialUrl: string | null = it.officialHint;
     if (!officialUrl && isInstitutionalHost(host)) officialUrl = it.url;
@@ -1704,11 +1775,25 @@ function jiangxiRelevanceFor(it: { title: string; tag: JiangxiTag; applicableYea
   const yr = it.applicableYear ? `${it.applicableYear}的` : "";
   switch (it.tag) {
     case "录取":
-      return /录取结果|录取名单|录取查询/.test(it.title)
-        ? `这是${yr}江西专升本录取结果类材料，关系到往年录取的实际去向，可先了解你目标院校的录取情况。`
-        : `这是${yr}江西专升本录取分数线材料，关系到你给 2028 年定目标分数时参考的往年录取门槛。`;
+      // Score lines and admission results are different materials and
+      // get different lines (user rule, 2026-11-23): the m-round wrote
+      // ONE template for the whole 录取 tag, so a 2026 score-line item
+      // and a 2024 headcount item differed only by the year digits.
+      if (/录取人数|录取结果|录取名单|录取查询|录取情况|录取名单公布/.test(it.title))
+        return `这是${yr}江西专升本录取结果类材料，关系到往年实际录取了多少人、录到哪些学校，可先了解你目标院校的录取情况。`;
+      if (/分数线|录取控制线|投档线|最低录取|录取分数/.test(it.title))
+        return `这是${yr}江西专升本录取分数线材料，关系到你给 2028 年定目标分数时参考的往年录取门槛。`;
+      return `这是${yr}江西专升本录取类材料，关系到往年录取的门槛和实际去向，先了解你目标院校的情况。`;
     case "报名":
-      return `这是${yr}江西专升本报名类通知，关系到你 2028 年报名时要走的流程、时间和入口，先熟悉步骤。`;
+      // Conditions and process are different materials too (user rule,
+      // 2026-11-23): two 2026 报名 items — 「报名条件及报考指南」 and
+      // 「报名流程及详细报考步骤」 — carried the identical sentence
+      // because the m-round keyed the line on tag + year alone.
+      if (/报名条件|报考条件|报名资格|报考资格|报名要求|报考指南/.test(it.title))
+        return `这是${yr}江西专升本报名条件类材料，关系到你 2028 年报名前先核对自己是否符合报考条件、要准备哪些材料。`;
+      if (/报名流程|报考步骤|报名步骤|报名程序|操作流程|详细报考|报名方式/.test(it.title))
+        return `这是${yr}江西专升本报名流程类材料，关系到你 2028 年报名时一步步怎么操作，先熟悉步骤、时间和入口。`;
+      return `这是${yr}江西专升本报名类通知，关系到你 2028 年报名的时间安排和入口，先了解往年的节奏。`;
     case "考试科目":
       return /准考证|考试时间|考试安排|考试日程/.test(it.title)
         ? `这是${yr}江西专升本考试安排类通知，关系到考试时间和准考证等考务事项，先了解往年节奏。`
@@ -1732,6 +1817,21 @@ function jiangxiRelevanceFor(it: { title: string; tag: JiangxiTag; applicableYea
  * that item's own tag/title/year. Official sources sort first inside
  * each group （官方原文优先）.
  */
+/**
+ * A short distinguishing phrase taken from an item's own title (user
+ * rule, 2026-11-23): strip the words every 江西专升本 title shares
+ * （江西 / 专升本 / 年份 / 通知…) and keep what is left — that residue
+ * is what makes THIS item different from its same-tag neighbours
+ * （报名条件及报考指南 vs 报名流程及详细报考步骤）.
+ */
+function jiangxiTitlePhrase(title: string): string {
+  return title
+    .replace(/20\d{2}\s*年?/g, " ")
+    .replace(/江西省?|普通高校|专升本|教育考试院|考试院|公告|通知|发布/g, " ")
+    .replace(/[「」『』【】〔〕（）()·・、，,：:；;！!？?—\-…\s]+/g, "")
+    .slice(0, 14);
+}
+
 function fixJiangxiList(items: JiangxiItem[]): JiangxiItem[] {
   const relevanceCounts = new Map<string, number>();
   for (const it of items) {
@@ -1772,10 +1872,33 @@ function fixJiangxiList(items: JiangxiItem[]): JiangxiItem[] {
           : yearNum !== null
             ? "reference"
             : it.noticeKind) as JiangxiNoticeKind,
-      summaryZh: it.summaryZh ? trimPartialTailWord(it.summaryZh, 90) : it.summaryZh,
-      points: dedupeSentences(it.points),
+      summaryZh: it.summaryZh ? trimPartialTailWord(decodeEntities(it.summaryZh), 90) : it.summaryZh,
+      points: dedupeSentences(it.points.map((p) => decodeEntities(p))),
     };
   });
+  // Column-level uniqueness guarantee (user rule, 2026-11-23): whatever
+  // the per-tag lines produced, no two items in this column may carry
+  // the IDENTICAL relevance sentence. A repeat gets one more clause
+  // built from its own title's distinguishing phrase (falling back to
+  // the source name when two titles reduce to the same phrase).
+  const seenRelevance = new Map<string, Set<string>>();
+  for (const it of fixed) {
+    const r = it.relevance.trim();
+    if (!r) continue;
+    const isFirst = !seenRelevance.has(r);
+    const used = seenRelevance.get(r) ?? new Set<string>();
+    seenRelevance.set(r, used);
+    if (isFirst) {
+      used.add(jiangxiTitlePhrase(it.title));
+      continue;
+    }
+    let phrase = jiangxiTitlePhrase(it.title);
+    if (!phrase || used.has(phrase)) phrase = `${phrase ? `${phrase}·` : ""}${it.source}`;
+    used.add(phrase);
+    it.relevance = r.endsWith("。")
+      ? `${r}本条具体内容是「${phrase}」。`
+      : `${r}（本条具体内容是「${phrase}」）`;
+  }
   fixed.sort((a, b) => {
     if (a.isReference !== b.isReference) return a.isReference ? 1 : -1;
     if (a.official !== b.official) return a.official ? -1 : 1;
@@ -4057,8 +4180,8 @@ function normalizeOverseas(raw: OverseasItem): z.infer<typeof overseasItemSchema
     source: it.source,
     publishedAt: it.publishedAt,
     country: it.country,
-    whatChanged: it.whatChanged ? trimPartialTailWord(it.whatChanged, 90) : it.whatChanged,
-    whoApplies: it.whoApplies,
+    whatChanged: it.whatChanged ? trimPartialTailWord(decodeEntities(it.whatChanged), 90) : it.whatChanged,
+    whoApplies: it.whoApplies ? decodeEntities(it.whoApplies) : it.whoApplies,
     effectiveWhen: it.effectiveWhen,
     // Per-matter effective-date lines (user rule, 2026-11-22): explicit
     // parts win (curated cards); otherwise an effectiveWhen carrying
@@ -4082,7 +4205,7 @@ function normalizeOverseas(raw: OverseasItem): z.infer<typeof overseasItemSchema
     eligibility: it.eligibility,
     isImmigration: it.isImmigration,
     identityLabel: it.identityLabel,
-    points: dedupeSentences(it.points),
+    points: dedupeSentences(it.points.map((p) => decodeEntities(p))),
     titleOnly: it.titleOnly,
     readUrl: it.readUrl,
     needsLogin: it.needsLogin,
@@ -4153,21 +4276,43 @@ function worldRelevanceFor(it: WorldItem): string {
 }
 
 function normalizeWorld(it: WorldItem): z.infer<typeof worldItemSchema> {
-  return { ...it, title: decodeEntities(it.title), relevance: worldRelevanceFor(it) };
+  return {
+    ...it,
+    title: decodeEntities(it.title),
+    summary: it.summary ? decodeEntities(it.summary) : it.summary,
+    relevance: worldRelevanceFor(it),
+  };
 }
 
 function normalizeLearning(it: LearningItem): z.infer<typeof learningItemSchema> {
   const fixed = correctLearningItem(it);
-  // Text hygiene on every read (user rule, 2026-11-22): decoded title,
-  // no duplicated sentence inside the points, and a summary that an
-  // older mid-word slice cut (e.g. "international studen") loses its
-  // partial tail word instead of displaying it.
-  const summaryZh = fixed.summaryZh ? trimPartialTailWord(fixed.summaryZh, 90) : fixed.summaryZh;
+  // Text hygiene on every read (user rules, 2026-11-22 + 2026-11-23):
+  // entities decoded in title, points AND summary (the m-round decoded
+  // titles only — a Coursera item's points still carried `&#160;`);
+  // no duplicated sentence inside the points; and a summary an older
+  // slice cut loses its partial tail word instead of displaying it.
+  const points = dedupeSentences(fixed.points.map((p) => decodeEntities(p)));
+  let summaryZh = fixed.summaryZh ? decodeEntities(fixed.summaryZh) : fixed.summaryZh;
+  // A relevance/summary line cut mid-SENTENCE is rebuilt from the
+  // item's OWN fuller text (user rule, 2026-11-23): when the stored
+  // summary does not end a sentence and one of the item's points is
+  // the same text uncut (the unenriched fallback stores the full
+  // source summary as the point), take complete sentences from that
+  // point instead. The Coursera case: "Every job across every industry
+  // is being reshaped by AI, but many professionals struggle" becomes
+  // the source's complete first sentence — English, because no model
+  // translation exists on the no-key deployment; never fabricated.
+  if (summaryZh && !/[。！？.!?…；;」』）)]$/.test(summaryZh.trim())) {
+    const probe = summaryZh.trim().slice(0, 40);
+    const fuller = points.find((p) => p.trim().length > summaryZh!.trim().length && p.trim().startsWith(probe));
+    if (fuller) summaryZh = completeSentences(fuller, 110);
+  }
+  summaryZh = summaryZh ? trimPartialTailWord(summaryZh, 90) : summaryZh;
   return {
     ...fixed,
     title: decodeEntities(fixed.title),
     summaryZh,
-    points: dedupeSentences(fixed.points),
+    points,
     relevance: summaryZh ?? "点开看适合谁、能学到什么；学段、费用和截止日期都以官方入口为准。",
   };
 }
@@ -4272,9 +4417,17 @@ export const Actions = {
     response: z.object({ asOf: z.string(), items: z.array(feedItemSchema) }),
     async handler(ctx, args) {
       const r = await loadCategory(ctx, args.category, args.force);
-      // Titles are entity-decoded on every read too, so a payload cached
-      // before the numeric-entity fix cannot show raw &#163; / &#183;.
-      return { asOf: r.asOf, items: r.items.map((it) => ({ ...it, title: decodeEntities(it.title) })) };
+      // Titles and summaries are entity-decoded on every read too, so a
+      // payload cached before the entity fixes cannot show raw
+      // &#163; / &#183; / &#160;.
+      return {
+        asOf: r.asOf,
+        items: r.items.map((it) => ({
+          ...it,
+          title: decodeEntities(it.title),
+          summary: it.summary ? decodeEntities(it.summary) : it.summary,
+        })),
+      };
     },
   }),
 
@@ -4478,7 +4631,11 @@ export const Actions = {
         if (r.key.startsWith("feed:") && (!maxFeed || r.fetchedAt.getTime() > maxFeed.getTime())) maxFeed = r.fetchedAt;
       }
       return {
-        items: items.slice(0, 60).map((it) => ({ ...it, title: decodeEntities(it.title) })),
+        items: items.slice(0, 60).map((it) => ({
+          ...it,
+          title: decodeEntities(it.title),
+          summary: it.summary ? decodeEntities(it.summary) : it.summary,
+        })),
         feedErrors,
         followedCount: subs.length,
         asOf: maxFeed ? maxFeed.toISOString() : new Date().toISOString(),
@@ -4552,7 +4709,7 @@ export const Actions = {
 
   getLearning: defineAction({
     description:
-      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生）, pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships), activity write-ups whose summary dates the event in the past (\"X月X日……举行/举办/召开\" with no replay and no sign-up, e.g. the 东湖大咖公开课 report), 专硕/学硕 master's-stage items (e.g. the 专硕 dorm-policy news), scholarships limited to one local school district's students or to high-school students only (school district / juniors and seniors / high school football / high school athlete / 学区 / 高中生， e.g. the St. Joseph scholarship and the People high-school athlete scholarship story) and expired intakes are all filtered out, so the list may honestly be empty. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip.",
+      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生； since 2026-11-23 the stage signals — middle school(s), 中小学， 初中， 高中生， 中六， JUPAS, DSE, 研究生/硕士研究生 — are matched against title + summary + points + audienceStage together, so an item whose stage is stated only in its body, e.g. an HKU undergraduate item naming JUPAS/中六 in its points, is excluded too), pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships), activity write-ups whose summary dates the event in the past (\"X月X日……举行/举办/召开\" with no replay and no sign-up, e.g. the 东湖大咖公开课 report), 专硕/学硕 master's-stage items (e.g. the 专硕 dorm-policy news), scholarships limited to one local school district's students or to high-school students only (school district / juniors and seniors / high school football / high school athlete / 学区 / 高中生， e.g. the St. Joseph scholarship and the People high-school athlete scholarship story) and expired intakes are all filtered out, so the list may honestly be empty. HTML entities (&#…; and &…;, incl. double-encoded forms) are decoded in titles, points and summaries at ingest and on every read (2026-11-23), and an unenriched item's summary/relevance line is rebuilt from complete sentences of its own source summary — never cut mid-sentence and never a fabricated translation. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip.",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -4642,7 +4799,12 @@ export const Actions = {
         blockedReason: string | null;
       };
       const cached = await readCacheStale<Detail>(ctx, key);
-      if (cached) return { ...cached.data, points: dedupeSentences(cached.data.points) };
+      if (cached)
+        return {
+          ...cached.data,
+          introZh: cached.data.introZh ? decodeEntities(cached.data.introZh) : cached.data.introZh,
+          points: dedupeSentences(cached.data.points.map((p) => decodeEntities(p))),
+        };
 
       // Resolve the direct publisher URL in parallel with summarizing:
       // Google News relay → batchexecute decode (shared cache), MSN repost
@@ -4692,7 +4854,7 @@ export const Actions = {
 
   getJiangxi: defineAction({
     description:
-      "Returns the 江西专升本 column for a Jiangxi 专科 student （信息安全技术应用， 2028 年毕业）: official-first notices about 报名/考试科目/专业对照/招生简章， each with applicable year, relevance to the major and what to do. Training-institution marketing （机构评测/测评等） and 高考择校 content for gaokao students choosing a 专科 school are hidden at ingest — he is already a second-year student. Ended exam-administration reminders （考区/考点/考场提醒、准考证提示 whose sitting has passed, e.g. the 2026 九江考区温馨提醒） are moved to history — filtered at ingest AND on every read so cached payloads obey too — while lasting-value material （考试科目/专业对照/招生方案/实施方案/报名流程/分数线） stays visible. Past-year items are flagged isReference （备考参考）; the pending list marks each 2028 matter as 待公布 until a 2028 notice covers it. Tags are content-derived deterministically at ingest and on every read (2026-11-22): 分数线/录取控制线/投档线/录取结果 → 录取， 报名流程/报名通知/报考 → 报名， 考试时间/科目安排/准考证 → 考试科目 — a score-line announcement can never stay tagged 报名. A missing applicable year is derived from the title, then the summary, then the publish date, so dated past-year material always shows its year. Relevance lines are per-item, grounded in the item's own tag/title/year; the old shared template (or any relevance repeated verbatim across items) is replaced on every read. Official sources (jxeea.cn / .gov.cn / .edu.cn) sort first inside each group.",
+      "Returns the 江西专升本 column for a Jiangxi 专科 student （信息安全技术应用， 2028 年毕业）: official-first notices about 报名/考试科目/专业对照/招生简章， each with applicable year, relevance to the major and what to do. Training-institution marketing （机构评测/测评等） and 高考择校 content for gaokao students choosing a 专科 school are hidden at ingest — he is already a second-year student. Ended exam-administration reminders （考区/考点/考场提醒、准考证提示 whose sitting has passed, e.g. the 2026 九江考区温馨提醒） are moved to history — filtered at ingest AND on every read so cached payloads obey too — while lasting-value material （考试科目/专业对照/招生方案/实施方案/报名流程/分数线） stays visible. Past-year items are flagged isReference （备考参考）; the pending list marks each 2028 matter as 待公布 until a 2028 notice covers it. Tags are content-derived deterministically at ingest and on every read (2026-11-22): 分数线/录取控制线/投档线/录取结果 → 录取， 报名流程/报名通知/报考 → 报名， 考试时间/科目安排/准考证 → 考试科目 — a score-line announcement can never stay tagged 报名. A missing applicable year is derived from the title, then the summary, then the publish date, so dated past-year material always shows its year. Relevance lines are per-item, grounded in the item's own tag/title/year; the old shared template (or any relevance repeated verbatim across items) is replaced on every read. Within a tag the line follows the title's own content signal (2026-11-23): 报名条件/报考指南 vs 报名流程/详细报考步骤 get different lines, as do 分数线/录取控制线 vs 录取人数/录取结果 — and a final column-level pass guarantees no two items in the column carry the identical relevance sentence, appending a clause built from the item's own title phrase when a repeat survives. Official sources (jxeea.cn / .gov.cn / .edu.cn) sort first inside each group.",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -4874,6 +5036,10 @@ export const Actions = {
       const todayStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
       for (const raw of le.items) {
         const it = normalizeLearning(raw);
+        // The learning column's strict filter (incl. the wrong-stage
+        // signals, 2026-11-23) governs this strip too — a middle-school
+        // or 研究生-stage item never counts as 近期可申请.
+        if (isLearningNotActionable(it, todayStr)) continue;
         if (!it.needsApplication || !it.officialUrl) continue;
         if (!it.deadline || it.deadline < todayStr) continue;
         pool.push({
