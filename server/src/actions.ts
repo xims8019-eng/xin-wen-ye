@@ -3,6 +3,7 @@ import { asc, eq } from "drizzle-orm";
 import * as schema from "./schema.js";
 import type { Ctx } from "./ctx.js";
 import { completeInference } from "./llm.js";
+import { EnrichDeterministicError, isDeterministicEnrichError } from "./llm.js";
 
 // ---------------------------------------------------------------------------
 // Local replacement for the SDK's `defineAction` (previously provided by
@@ -683,11 +684,10 @@ function sleepMs(ms: number): Promise<void> {
 // it is the per-minute cap that binds). So enrichment batches now run ONE AT
 // A TIME with a pause between batches: a batch call plus a 5s pause keeps a
 // refresh at roughly 12 calls/minute at most, under the cap. A batch that
-// still hits a 429 is retried once after an 8s backoff; if that also fails,
-// the caller's existing split-the-batch-in-half retry takes over. Batch size
-// (5 per batch, 3 for overseas), the per-item enrichment caches and each
-// call's timeout are unchanged, and every column still writes its own cache
-// the moment it finishes — serialization never delays a finished column's
+// still hits a 429 is retried once after an 8s backoff, only when the run
+// budget still allows it. Batch size (5 per batch, 3 for overseas), the
+// per-item enrichment caches and every column's own cache write on
+// completion are unchanged — serialization never delays a finished column's
 // cache write behind another column.
 const ENRICH_BATCH_GAP_MS = 5000;
 const ENRICH_429_BACKOFF_MS = 8000;
@@ -697,15 +697,259 @@ function isRateLimitError(e: unknown): boolean {
   return /\b429\b/.test(msg) || /too many requests/i.test(msg) || /rate.?limit/i.test(msg);
 }
 
-/** Runs one model call; on a 429, waits and retries the same call once. */
-async function completeEnrichment<T>(call: () => Promise<T>): Promise<T> {
-  try {
-    return await call();
-  } catch (e) {
-    if (!isRateLimitError(e)) throw e;
-    await sleepMs(ENRICH_429_BACKOFF_MS);
-    return await call();
+// --- Enrichment hardening (p-round, 2026-11-23) ---------------------------
+// Three defects found in the o-round (2026-11-23): (1) the batch prompts
+// never stated the {"items": [...]} shape, and the managed runtime (like
+// Gemini's OpenAI-compat layer on the self-hosted copy) returns a bare JSON
+// array when the model ignores the json_object constraint — the strict
+// object schema then throws and the whole column falls back; (2) ANY batch
+// error triggered a split-half retry, so a deterministic parse/schema error
+// was retried until the 60s function budget died before any column wrote
+// its cache; (3) a single 110s model timeout could starve every column
+// after it, because refreshAll had no time budget and no per-batch save.
+//
+// The fixes below are shared by all three enriched columns:
+//  - each batch prompt states the {"items": [...]} shape explicitly;
+//  - each batch call uses a "loose" union schema — the strict object OR a
+//    bare array of the same item shape — so a bare array survives the
+//    managed runtime's validation and is wrapped into {"items": [...]} by
+//    looseItems() below (the item fields themselves are still strictly
+//    checked: a bad `id` still fails the whole batch);
+//  - errors are classified, not blanket-caught: deterministic errors
+//    (schema/parse failure, model not configured) end the batch at once
+//    with the previous summary / original text kept; only 429s retry, once,
+//    and only when the budget allows;
+//  - results are backfilled by the batch's own issued ids only — missing,
+//    duplicate or out-of-range ids never borrow another item's text;
+//  - a run budget (55s, targeting the 60s self-hosted function cap) gates
+//    every batch start and derives every per-call timeout, with time
+//    reserved for cache writes; each successful batch is saved at once, so
+//    a run killed mid-way keeps its progress and the next run resumes from
+//    the items still missing from the per-URL store.
+export const REFRESH_BUDGET_MS = 55_000;
+const REFRESH_RESERVE_MS = 8_000;
+const MIN_BATCH_START_MS = 12_000;
+const ENRICH_CALL_TIMEOUT_MAX_SECS = 45;
+const ENRICH_CALL_TIMEOUT_MIN_SECS = 10;
+
+export interface RunBudget {
+  readonly startedAt: number;
+  readonly deadline: number;
+}
+
+export function newRunBudget(totalMs: number = REFRESH_BUDGET_MS): RunBudget {
+  const startedAt = Date.now();
+  return { startedAt, deadline: startedAt + totalMs };
+}
+
+export function budgetRemainingMs(budget: RunBudget): number {
+  return budget.deadline - Date.now();
+}
+
+/** True when enough time remains to start one more batch and save its result. */
+export function budgetCanStartBatch(budget: RunBudget): boolean {
+  return budgetRemainingMs(budget) >= MIN_BATCH_START_MS;
+}
+
+/**
+ * Per-call model timeout, derived from the remaining budget with time kept
+ * back for cache writes. Never a fixed 110s again: a call that starts late
+ * in a run gets a short timeout instead of eating the whole budget, and no
+ * single call may exceed the 60s function cap.
+ */
+export function timeoutSecsForCall(budget: RunBudget): number {
+  const secs = Math.ceil((budgetRemainingMs(budget) - REFRESH_RESERVE_MS) / 1000);
+  return Math.min(ENRICH_CALL_TIMEOUT_MAX_SECS, Math.max(ENRICH_CALL_TIMEOUT_MIN_SECS, secs));
+}
+
+export type EnrichErrorKind = "deterministic" | "rate-limit" | "transient";
+
+/**
+ * Classifies a model-call failure by type, not by blanket catch.
+ * Deterministic = the call can never succeed by retrying: a schema /
+ * validation failure (including the self-hosted EnrichDeterministicError
+ * and the ZodError "expected object, received array"),
+ * a JSON parse failure, or no model configured. Rate-limit = 429 / quota.
+ * Everything else (timeouts, network blips) is transient — the batch still
+ * ends at once (the budget is the retry policy now), it just isn't a
+ * deterministic failure.
+ */
+export function classifyEnrichError(e: unknown): EnrichErrorKind {
+  if (isDeterministicEnrichError(e)) return "deterministic";
+  if (isRateLimitError(e)) return "rate-limit";
+  const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+  if (
+    /zoderror|schema|validation|failed to parse|json|not configured|未配置|not_configured|model.*config|invalid.*response|empty response/i.test(
+      msg,
+    )
+  )
+    return "deterministic";
+  return "transient";
+}
+
+/**
+ * True when the error is the runtime rejecting the union schema contract
+ * itself (not the model's output): the managed worker converts the Zod
+ * schema to JSON Schema before the call, so a daemon that cannot express
+ * the object-or-array union fails here, before any model text exists.
+ * Callers fall back to the strict object schema for the rest of the run.
+ * An EnrichDeterministicError is an OUTPUT failure, never a contract failure.
+ */
+export function isSchemaContractError(e: unknown): boolean {
+  if (e instanceof EnrichDeterministicError) return false;
+  if (isRateLimitError(e)) return false;
+  const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+  return /json.?schema|anyof|union|schema.*(unsupported|invalid|not supported|not representable)/i.test(msg);
+}
+
+/**
+ * Normalizes a batch result accepted by a loose union schema: a correct
+ * {"items": [...]} object passes through, a bare top-level array is wrapped
+ * as {"items": <array>} — the tolerance the o-round's bare-array ZodError
+ * needed. The wrapper does no field repair: item fields are still checked
+ * by the schema itself (see the .catch() defaults on non-id fields, and the
+ * strict numeric `id`).
+ */
+export function looseItems<T>(result: { items: T[] } | T[]): T[] {
+  return Array.isArray(result) ? result : result.items;
+}
+
+/**
+ * Backfills batch results by the batch's own issued ids ONLY. Missing id →
+ * absent from the map (the caller keeps that item's original text /
+ * fallback); duplicate id → first occurrence wins; out-of-range id →
+ * ignored. Never a positional fallback: an id outside [offset,
+ * offset + batchLength) must not borrow a neighbouring item's summary,
+ * relevance or application conditions.
+ */
+export function backfillEnrichResults<T extends { id: number }>(
+  results: T[],
+  offset: number,
+  batchLength: number,
+): Map<number, T> {
+  const byId = new Map<number, T>();
+  for (const r of results) {
+    const gid = r.id;
+    if (!Number.isInteger(gid) || gid < offset || gid >= offset + batchLength) continue;
+    if (byId.has(gid)) continue;
+    byId.set(gid, r);
   }
+  return byId;
+}
+
+/**
+ * Runs one model call. The call receives its budget-derived timeout. Only a
+ * 429 retries, once, after the 8s backoff — and only when the budget still
+ * leaves room for the retry plus a cache write. Deterministic and transient
+ * errors are rethrown at once: the caller ends the batch, keeps the previous
+ * summary / original text, and moves on (no split-half retry — splitting a
+ * deterministically-failing batch only re-spends the budget).
+ */
+export async function completeEnrichment<T>(
+  call: (timeoutSecs: number) => Promise<T>,
+  budget?: RunBudget,
+): Promise<T> {
+  const timeoutSecs = budget ? timeoutSecsForCall(budget) : ENRICH_CALL_TIMEOUT_MAX_SECS;
+  try {
+    return await call(timeoutSecs);
+  } catch (e) {
+    if (classifyEnrichError(e) !== "rate-limit") throw e;
+    if (!budget || budgetRemainingMs(budget) <= ENRICH_429_BACKOFF_MS + MIN_BATCH_START_MS) throw e;
+    await sleepMs(ENRICH_429_BACKOFF_MS);
+    return await call(timeoutSecsForCall(budget));
+  }
+}
+
+/**
+ * Bounds a per-URL enrichment store before writing it: current candidates
+ * first, then recent entries from previous runs, at most 200 entries.
+ * Shared by all three columns so a per-batch save writes exactly what the
+ * end-of-load save used to write.
+ */
+export function boundedEnrichStore<T>(store: Record<string, T>, urls: string[]): Record<string, T> {
+  const out: Record<string, T> = {};
+  for (const url of urls) {
+    const e = store[url];
+    if (e) out[url] = e;
+  }
+  for (const [url, e] of Object.entries(store)) {
+    if (Object.keys(out).length >= 200) break;
+    if (!(url in out)) out[url] = e;
+  }
+  return out;
+}
+
+// --- Per-column refresh status (p-round, 2026-11-23) -----------------------
+// Requirement 4: getStatus must answer "which column updated". Content time
+// is read off each column's own cache row in getStatus; enrichment success
+// time, latest error (+ time) and the recovered flag live in meta:status
+// under `columns`, written by the helpers below. A later success clears the
+// error and sets recovered=true; an error clears recovered.
+export type ColumnKey = "learning" | "jiangxi" | "overseas";
+
+export const columnStatusSchema = z.object({
+  contentAt: z.string().nullable(),
+  enrichAt: z.string().nullable(),
+  error: z.string().nullable(),
+  errorAt: z.string().nullable(),
+  recovered: z.boolean(),
+});
+
+export type ColumnStatus = z.infer<typeof columnStatusSchema>;
+
+const EMPTY_COLUMN_STATUS: ColumnStatus = {
+  contentAt: null,
+  enrichAt: null,
+  error: null,
+  errorAt: null,
+  recovered: false,
+};
+
+async function readMetaStatus(ctx: Ctx): Promise<Record<string, unknown>> {
+  const db = ctx.db;
+  const rows = await db.select().from(schema.cacheSnapshots).where(eq(schema.cacheSnapshots.key, "meta:status")).limit(1);
+  return rows[0] ? (JSON.parse(rows[0].payload) as Record<string, unknown>) : {};
+}
+
+function columnStatusesOf(prev: Record<string, unknown>): Record<string, ColumnStatus> {
+  return (prev.columns as Record<string, ColumnStatus> | undefined) ?? {};
+}
+
+async function recordColumnStatus(ctx: Ctx, column: ColumnKey, patch: Partial<ColumnStatus>): Promise<void> {
+  try {
+    const prev = await readMetaStatus(ctx);
+    const columns = columnStatusesOf(prev);
+    columns[column] = { ...(columns[column] ?? { ...EMPTY_COLUMN_STATUS }), ...patch };
+    await writeCache(ctx, "meta:status", { ...prev, columns });
+  } catch {
+    // bookkeeping only — never break a load over it
+  }
+}
+
+/** A batch enriched successfully: record the success time; a previous error is marked recovered. */
+async function markColumnEnrichSuccess(ctx: Ctx, column: ColumnKey): Promise<void> {
+  try {
+    const prev = await readMetaStatus(ctx);
+    const columns = columnStatusesOf(prev);
+    const cur = columns[column] ?? { ...EMPTY_COLUMN_STATUS };
+    columns[column] = {
+      ...cur,
+      enrichAt: new Date().toISOString(),
+      ...(cur.error ? { error: null, recovered: true } : {}),
+    };
+    await writeCache(ctx, "meta:status", { ...prev, columns });
+  } catch {
+    // bookkeeping only
+  }
+}
+
+/** A batch's enrichment failed: record the latest error and clear the recovered flag. */
+async function markColumnEnrichError(ctx: Ctx, column: ColumnKey, e: unknown): Promise<void> {
+  await recordColumnStatus(ctx, column, {
+    error: (e instanceof Error ? `${e.name}: ${e.message}` : String(e)).slice(0, 500),
+    errorAt: new Date().toISOString(),
+    recovered: false,
+  });
 }
 
 /**
@@ -916,6 +1160,14 @@ interface LearningItem {
   audienceStage: string | null;
   deadline: string | null;
   needsApplication: boolean;
+  /**
+   * Which text the summary shows (p-round, 2026-11-23): enriched by the
+   * latest build ("new"), enriched by an earlier build ("stored"), or the
+   * source's own text because no enrichment exists ("original"). The UI
+   * badges this so the reader can tell a fresh model summary from an old
+   * one or from the original text.
+   */
+  enrichState: "new" | "stored" | "original";
 }
 
 const LEARNING_TTL_MS = 45 * 60 * 1000;
@@ -950,21 +1202,29 @@ const LEARNING_FEEDS: Array<{ hint: LearningCategory; name: string; url: string;
   { hint: "opportunities", name: "Bing News · Scholarships", url: bingNewsUrl("scholarship application students university"), direct: false },
 ];
 
-const learningEnrichSchema = z.object({
-  items: z.array(
-    z.object({
-      id: z.number(),
-      keep: z.boolean().catch(true),
-      category: z.enum(["courses", "resources", "opportunities"]).catch("resources"),
-      summaryZh: z.string().catch(""),
-      pointsZh: z.array(z.string()).catch([]),
-      audienceStage: z.string().nullable().catch(null),
-      deadline: z.string().nullable().catch(null),
-      fee: z.string().nullable().catch(null),
-      needsApplication: z.boolean().catch(false),
-    }),
-  ),
+const learningEnrichItemSchema = z.object({
+  id: z.number(),
+  keep: z.boolean().catch(true),
+  category: z.enum(["courses", "resources", "opportunities"]).catch("resources"),
+  summaryZh: z.string().catch(""),
+  pointsZh: z.array(z.string()).catch([]),
+  audienceStage: z.string().nullable().catch(null),
+  deadline: z.string().nullable().catch(null),
+  fee: z.string().nullable().catch(null),
+  needsApplication: z.boolean().catch(false),
 });
+
+export const learningEnrichSchema = z.object({
+  items: z.array(learningEnrichItemSchema),
+});
+
+// Loose contract for the batch call (p-round, 2026-11-23): the strict object
+// OR a bare array of the same items. The managed runtime converts the union
+// to JSON Schema and validates either shape, so a model that returns a bare
+// array no longer throws — looseItems() wraps it into {"items": [...]}.
+// Item fields are still strictly checked (a non-numeric `id` fails the
+// whole batch, deterministically).
+export const learningEnrichLooseSchema = z.union([learningEnrichSchema, z.array(learningEnrichItemSchema)]);
 
 /** Persisted per-item enrichment, keyed by the item's direct publisher URL. */
 interface EnrichEntry {
@@ -1214,7 +1474,11 @@ type LearningCandidate = FeedItem & {
   officialHint: string | null;
 };
 
-async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: LearningItem[]; asOf: string }> {
+async function loadLearning(
+  ctx: Ctx,
+  force: boolean,
+  budget: RunBudget = newRunBudget(),
+): Promise<{ items: LearningItem[]; asOf: string }> {
   if (!force) {
     const cached = await readCache<LearningItem[]>(ctx, "learning:all:v2", LEARNING_TTL_MS);
     // Guard against payloads written by older builds: missing link fields, or
@@ -1386,8 +1650,6 @@ async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: Learning
   //    partially-failed run.
   const enrichStore = (await readCacheStale<Record<string, EnrichEntry>>(ctx, "learning:enrich:v2"))?.data ?? {};
   const fresh = candidates.filter((it) => !enrichStore[it.url]);
-  const freshIndex = new Map<string, number>();
-  fresh.forEach((it, i) => freshIndex.set(it.url, i));
 
   const enrichPrompt = (batch: LearningCandidate[], offset: number) => {
     const listing = batch
@@ -1407,12 +1669,15 @@ async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: Learning
       `- audienceStage：适用学段（如 小学/初中/高中/本科/硕士研究生/博士研究生/不限）。标题或摘要明确提到、或标题本身明确限定（如“博士研究生招生简章”“中学生暑期课程”）时就填——即使该条无摘要，也可以依据标题中明确写出的学段填；都没有才填 null。\n` +
       `- deadline：报名截止日期，只有标题或摘要明确写出具体日期时才填，格式 YYYY-MM-DD；只写“即将截止”“倒计时”而没有具体日期的，填 null。\n` +
       `- fee：费用，只有标题或摘要明确写出时才填（如“免费”“学费 2 万元”“报名费 180 元”），没写就填 null（页面会显示「未公布」，不要猜）。\n` +
-      `- needsApplication：这条是否需要报名/申请才能参加。\n\n${listing}`
+      `- needsApplication：这条是否需要报名/申请才能参加。\n\n只返回一个 JSON 对象，形状固定为 {"items":[...]}，不要输出其他任何文字；每条结果保留输入编号对应的 id（即 [n] 中的 n），结果顺序可以与输入不同。\n\n${listing}`
     );
   };
 
   type EnrichResult = z.infer<typeof learningEnrichSchema>["items"][number];
-  const byId = new Map<number, EnrichResult>();
+  // URLs enriched by THIS run's batches (for the per-item enrichState badge);
+  // URLs the model dropped (keep=false) in this run.
+  const newlyEnrichedUrls = new Set<string>();
+  const droppedUrls = new Set<string>();
   let enrichErrorRecorded = false;
   const recordEnrichError = async (e: unknown, batchStart: number) => {
     if (enrichErrorRecorded) return;
@@ -1421,55 +1686,33 @@ async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: Learning
       const db = ctx.db;
       const rows = await db.select().from(schema.cacheSnapshots).where(eq(schema.cacheSnapshots.key, "meta:status")).limit(1);
       const prev = rows[0] ? (JSON.parse(rows[0].payload) as Record<string, unknown>) : {};
+      const columns = (prev.columns as Record<string, ColumnStatus> | undefined) ?? {};
+      const cur = columns.learning ?? { ...EMPTY_COLUMN_STATUS };
+      columns.learning = {
+        ...cur,
+        error: (e instanceof Error ? `${e.name}: ${e.message}` : String(e)).slice(0, 500),
+        errorAt: new Date().toISOString(),
+        recovered: false,
+      };
       await writeCache(ctx, "meta:status", {
         ...prev,
         enrichError: (e instanceof Error ? `${e.name}: ${e.message}` : String(e)).slice(0, 500),
         enrichErrorAt: new Date().toISOString(),
         enrichBatch: batchStart,
+        columns,
       });
     } catch {
       // ignore bookkeeping failures
     }
   };
-  // Small batches: a 10-item call measurably exceeded the inference timeout
-  // (a 6-item call takes ~75s), which is why enrichment results kept being
-  // lost. 5 items per batch, and a failed batch retries once as two halves.
-  // Since 2026-11-23 the batches (and the two halves) run SERIALLY with a
-  // pause between calls — see the pacing note at completeEnrichment.
-  const enrichBatch = async (batch: LearningCandidate[], offset: number): Promise<void> => {
-    try {
-      const result = await completeEnrichment(() =>
-        completeInference(ctx, enrichPrompt(batch, offset), {
-          schema: learningEnrichSchema,
-          timeout_secs: 110,
-        }),
-      );
-      result.items.forEach((r, j) => {
-        const gid = r.id >= offset && r.id < offset + batch.length ? r.id : offset + j;
-        if (gid < offset + batch.length && !byId.has(gid)) byId.set(gid, r);
-      });
-    } catch (e) {
-      await recordEnrichError(e, offset);
-      if (batch.length > 2) {
-        const mid = Math.ceil(batch.length / 2);
-        await enrichBatch(batch.slice(0, mid), offset);
-        await sleepMs(ENRICH_BATCH_GAP_MS);
-        await enrichBatch(batch.slice(mid), offset + mid);
-      }
+  // Fold one batch result into the persistent enrichment store. Runs per
+  // batch (not once at the end), so a run killed after batch N keeps
+  // batch N's results.
+  const foldResult = (url: string, r: EnrichResult): boolean => {
+    if (!r.keep) {
+      droppedUrls.add(url);
+      return false;
     }
-  };
-  const batches: LearningCandidate[][] = [];
-  for (let s = 0; s < fresh.length; s += 5) batches.push(fresh.slice(s, s + 5));
-  for (const [bi, batch] of batches.entries()) {
-    if (bi > 0) await sleepMs(ENRICH_BATCH_GAP_MS);
-    await enrichBatch(batch, bi * 5);
-  }
-
-  // Fold this run's successful results into the persistent enrichment store.
-  let newEnriched = 0;
-  for (const [url, idx] of freshIndex) {
-    const r = byId.get(idx);
-    if (!r || !r.keep) continue;
     let deadline: string | null = null;
     if (r.deadline) {
       const d = new Date(`${r.deadline}T00:00:00`);
@@ -1484,13 +1727,78 @@ async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: Learning
       fee: r.fee?.trim() ? r.fee.trim() : null,
       needsApplication: r.needsApplication,
     };
-    newEnriched++;
+    newlyEnrichedUrls.add(url);
+    return true;
+  };
+  // Whether the loose (object-or-array) contract is still in use for this
+  // run: if the runtime rejects the union schema itself, fall back to the
+  // strict object schema for this and later batches.
+  let looseSchemaOk = true;
+  // Small batches: a 10-item call measurably exceeded the inference timeout
+  // (a 6-item call takes ~75s), which is why enrichment results kept being
+  // lost. 5 items per batch, run SERIALLY with a pause between calls — see
+  // the pacing note at completeEnrichment. A failed batch ends at once
+  // (p-round, 2026-11-23): deterministic errors never retry, 429s retry
+  // once inside completeEnrichment when the budget allows, and there is no
+  // split-half retry any more — the items stay fresh, so the next run
+  // resumes from them instead of re-spending this run's budget.
+  const enrichBatch = async (batch: LearningCandidate[], offset: number): Promise<boolean> => {
+    if (!budgetCanStartBatch(budget)) return false;
+    const attempt = async (schema: typeof learningEnrichSchema | typeof learningEnrichLooseSchema) =>
+      completeEnrichment(
+        (timeoutSecs) =>
+          completeInference(ctx, enrichPrompt(batch, offset), {
+            schema,
+            timeout_secs: timeoutSecs,
+          }),
+        budget,
+      );
+    let raw: z.infer<typeof learningEnrichLooseSchema>;
+    try {
+      raw = looseSchemaOk ? await attempt(learningEnrichLooseSchema) : await attempt(learningEnrichSchema);
+    } catch (e) {
+      if (looseSchemaOk && isSchemaContractError(e)) {
+        looseSchemaOk = false;
+        try {
+          raw = await attempt(learningEnrichSchema);
+        } catch (e2) {
+          await recordEnrichError(e2, offset);
+          return false;
+        }
+      } else {
+        await recordEnrichError(e, offset);
+        return false;
+      }
+    }
+    const results = backfillEnrichResults(looseItems(raw), offset, batch.length);
+    let batchEnriched = 0;
+    for (const [gid, r] of results) {
+      const url = fresh[gid]?.url;
+      if (!url) continue;
+      if (foldResult(url, r)) batchEnriched++;
+    }
+    // Save this batch's results NOW (p-round, 2026-11-23): the old code
+    // folded everything only after all batches, so a kill mid-run lost
+    // every finished batch. A missing id simply stays fresh for next run.
+    if (batchEnriched > 0 || droppedUrls.size > 0) {
+      await writeCache(ctx, "learning:enrich:v2", boundedEnrichStore(enrichStore, candidates.map((c) => c.url)));
+      await markColumnEnrichSuccess(ctx, "learning");
+    }
+    return batchEnriched > 0;
+  };
+  const batches: LearningCandidate[][] = [];
+  for (let s = 0; s < fresh.length; s += 5) batches.push(fresh.slice(s, s + 5));
+  for (const [bi, batch] of batches.entries()) {
+    // Out of budget: stop starting batches — the rest stay fresh, so the
+    // next refresh resumes from the unfinished batches.
+    if (!budgetCanStartBatch(budget)) break;
+    if (bi > 0) await sleepMs(ENRICH_BATCH_GAP_MS);
+    await enrichBatch(batch, bi * 5);
   }
-  const droppedUrls = new Set<string>();
-  for (const [url, idx] of freshIndex) {
-    const r = byId.get(idx);
-    if (r && !r.keep) droppedUrls.add(url);
-  }
+
+  // Results were already folded into the persistent enrichment store per
+  // batch above (with a save after each successful batch); nothing is left
+  // to fold here.
 
   // 6) Build the final items. Every item's url AND readUrl are the direct
   //    publisher address resolved in step 2 — never a relay link. Items the
@@ -1546,6 +1854,7 @@ async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: Learning
       audienceStage: entry?.audienceStage ?? null,
       deadline: entry?.deadline ?? null,
       needsApplication: entry?.needsApplication ?? it.hint === "opportunities",
+      enrichState: !entry ? "original" : newlyEnrichedUrls.has(it.url) ? "new" : "stored",
     });
   }
 
@@ -1567,18 +1876,10 @@ async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: Learning
   }
 
   // Persist the enrichment store (bounded: current candidates first, then
-  // recent entries from previous runs) and the column itself.
-  const boundedStore: Record<string, EnrichEntry> = {};
-  for (const it of candidates) {
-    const e = enrichStore[it.url];
-    if (e) boundedStore[it.url] = e;
-  }
-  for (const [url, e] of Object.entries(enrichStore)) {
-    if (Object.keys(boundedStore).length >= 200) break;
-    if (!(url in boundedStore)) boundedStore[url] = e;
-  }
-  await writeCache(ctx, "learning:enrich:v2", boundedStore);
-  void newEnriched;
+  // recent entries from previous runs) and the column itself. Per-batch
+  // saves already wrote the store during the run; this final write just
+  // settles it.
+  await writeCache(ctx, "learning:enrich:v2", boundedEnrichStore(enrichStore, candidates.map((c) => c.url)));
   const asOf = await writeCache(ctx, "learning:all:v2", items);
   return { items, asOf };
 }
@@ -1715,19 +2016,23 @@ const JIANGXI_QUERIES = [
   "江西 专升本 报名 招生简章",
 ];
 
-const jiangxiEnrichSchema = z.object({
-  items: z.array(
-    z.object({
-      id: z.number(),
-      keep: z.boolean().catch(true),
-      tag: z.enum(["报名", "考试科目", "专业对照", "招生简章", "录取", "其他"]).catch("其他"),
-      summaryZh: z.string().catch(""),
-      pointsZh: z.array(z.string()).catch([]),
-      relevance: z.string().catch(""),
-      actionNeeded: z.string().catch(""),
-    }),
-  ),
+const jiangxiEnrichItemSchema = z.object({
+  id: z.number(),
+  keep: z.boolean().catch(true),
+  tag: z.enum(["报名", "考试科目", "专业对照", "招生简章", "录取", "其他"]).catch("其他"),
+  summaryZh: z.string().catch(""),
+  pointsZh: z.array(z.string()).catch([]),
+  relevance: z.string().catch(""),
+  actionNeeded: z.string().catch(""),
 });
+
+export const jiangxiEnrichSchema = z.object({
+  items: z.array(jiangxiEnrichItemSchema),
+});
+
+// Loose contract (p-round, 2026-11-23): strict object OR a bare array of
+// the same items — see the note on learningEnrichLooseSchema.
+export const jiangxiEnrichLooseSchema = z.union([jiangxiEnrichSchema, z.array(jiangxiEnrichItemSchema)]);
 
 interface JiangxiEnrichEntry {
   tag: JiangxiTag;
@@ -2031,7 +2336,11 @@ function isJiangxiEndedExamReminder(title: string, publishedAt: string | null): 
   return Date.now() - pub > 45 * 24 * 3600 * 1000;
 }
 
-async function loadJiangxi(ctx: Ctx, force: boolean): Promise<{ items: JiangxiItem[]; asOf: string }> {
+async function loadJiangxi(
+  ctx: Ctx,
+  force: boolean,
+  budget: RunBudget = newRunBudget(),
+): Promise<{ items: JiangxiItem[]; asOf: string }> {
   if (!force) {
     const cached = await readCache<JiangxiItem[]>(ctx, "jiangxi:all:v4", JIANGXI_TTL_MS);
     if (cached) return { items: cached.data, asOf: cached.asOf };
@@ -2087,57 +2396,90 @@ async function loadJiangxi(ctx: Ctx, force: boolean): Promise<{ items: JiangxiIt
 
   const store = (await readCacheStale<Record<string, JiangxiEnrichEntry>>(ctx, "jiangxi:enrich:v1"))?.data ?? {};
   const fresh = deduped.filter((it) => !store[it.url]);
+  // Whether the loose (object-or-array) contract is still in use for this
+  // run — see the learning column's note on the union-schema fallback.
+  let looseSchemaOk = true;
   const enrichBatch = async (batch: FeedItem[], offset: number): Promise<void> => {
+    if (!budgetCanStartBatch(budget)) return;
     const listing = batch
       .map((it, j) => {
         const has = !!(it.summary && it.summary.trim());
         return `[${offset + j}] 来源:${it.source} | 标题:${it.title} | 摘要:${has ? (it.summary as string).slice(0, 180) : "（无摘要，仅有标题）"}`;
       })
       .join("\n");
-    try {
-      const result = await completeEnrichment(() =>
-        completeInference(ctx, 
-        `你在为一位江西大二专科生（专业：信息安全技术应用，预计 2028 年毕业、2028 年参加普通高校专升本）整理「江西专升本」栏目。逐条判断：\n` +
-          `- keep：是否确为江西省普通高校专升本的通知/政策/招生信息。成人高考、自考、培训机构广告、机构测评软文、面向高考生选大专的择校指南 keep=false。\n` +
-          `- tag：报名 / 考试科目 / 专业对照 / 招生简章 / 录取 / 其他，按内容选最贴切的一个——分数线、录取控制线、投档线、录取结果归「录取」；报名流程、报名通知、报考归「报名」；考试时间、科目安排、准考证归「考试科目」。\n` +
-          `- summaryZh：一句中文概括这条讲了什么，只能依据摘要已有信息；无摘要时留空字符串，绝不根据标题猜正文。\n` +
-          `- pointsZh：2-3 条中文要点，全部来自摘要原文；无摘要留空数组。\n` +
-          `- relevance：一句中文说明与这位学生的关系，必须依据本条自己的标题/摘要写，每条各不相同，不要多条共用同一句模板。摘要或标题明确涉及信息安全/计算机类专业时说明直接关系；只是全省通用通知时，说明这是全体考生都要看的通用事项；不要编造专业对照结论。\n` +
-          `- actionNeeded：一句中文说明他现在需要做什么。往年（2028 年之前）的材料，写明这是备考参考、现在只需了解科目与要求；不要编造报名日期或截止时间。\n\n${listing}`,
-        { schema: jiangxiEnrichSchema, timeout_secs: 110 },
-        ),
+    const prompt =
+      `你在为一位江西大二专科生（专业：信息安全技术应用，预计 2028 年毕业、2028 年参加普通高校专升本）整理「江西专升本」栏目。逐条判断：\n` +
+      `- keep：是否确为江西省普通高校专升本的通知/政策/招生信息。成人高考、自考、培训机构广告、机构测评软文、面向高考生选大专的择校指南 keep=false。\n` +
+      `- tag：报名 / 考试科目 / 专业对照 / 招生简章 / 录取 / 其他，按内容选最贴切的一个——分数线、录取控制线、投档线、录取结果归「录取」；报名流程、报名通知、报考归「报名」；考试时间、科目安排、准考证归「考试科目」。\n` +
+      `- summaryZh：一句中文概括这条讲了什么，只能依据摘要已有信息；无摘要时留空字符串，绝不根据标题猜正文。\n` +
+      `- pointsZh：2-3 条中文要点，全部来自摘要原文；无摘要留空数组。\n` +
+      `- relevance：一句中文说明与这位学生的关系，必须依据本条自己的标题/摘要写，每条各不相同，不要多条共用同一句模板。摘要或标题明确涉及信息安全/计算机类专业时说明直接关系；只是全省通用通知时，说明这是全体考生都要看的通用事项；不要编造专业对照结论。\n` +
+      `- actionNeeded：一句中文说明他现在需要做什么。往年（2028 年之前）的材料，写明这是备考参考、现在只需了解科目与要求；不要编造报名日期或截止时间。\n\n只返回一个 JSON 对象，形状固定为 {"items":[...]}，不要输出其他任何文字；每条结果保留输入编号对应的 id（即 [n] 中的 n），结果顺序可以与输入不同。\n\n${listing}`;
+    const attempt = async (schema: typeof jiangxiEnrichSchema | typeof jiangxiEnrichLooseSchema) =>
+      completeEnrichment(
+        (timeoutSecs) => completeInference(ctx, prompt, { schema, timeout_secs: timeoutSecs }),
+        budget,
       );
-      const dropped = new Set<string>();
-      result.items.forEach((r, j) => {
-        const idx = r.id >= offset && r.id < offset + batch.length ? r.id : offset + j;
-        const it = deduped.find((d) => d.url === fresh[idx]?.url);
-        if (!it) return;
-        if (!r.keep) {
-          dropped.add(it.url);
+    let raw: z.infer<typeof jiangxiEnrichLooseSchema>;
+    try {
+      raw = looseSchemaOk ? await attempt(jiangxiEnrichLooseSchema) : await attempt(jiangxiEnrichSchema);
+    } catch (e) {
+      if (looseSchemaOk && isSchemaContractError(e)) {
+        looseSchemaOk = false;
+        try {
+          raw = await attempt(jiangxiEnrichSchema);
+        } catch (e2) {
+          // p-round, 2026-11-23: Jiangxi errors used to be swallowed
+          // silently — they are now recorded per column, and the batch ends
+          // at once (no split-half retry); fallback entries below cover
+          // anything still missing.
+          await markColumnEnrichError(ctx, "jiangxi", e2);
           return;
         }
-        const has = !!(it.summary && it.summary.trim());
-        store[it.url] = {
-          tag: r.tag as JiangxiTag,
-          summaryZh: has ? r.summaryZh.trim() || null : null,
-          points: has ? r.pointsZh.map((p) => p.trim()).filter(Boolean).slice(0, 3) : [],
-          relevance: r.relevance.trim(),
-          actionNeeded: r.actionNeeded.trim(),
-        };
-      });
-      for (const url of dropped) delete store[url];
-      // Mark dropped items so they are excluded below: keep a tombstone list.
+      } else {
+        await markColumnEnrichError(ctx, "jiangxi", e);
+        return;
+      }
+    }
+    const dropped = new Set<string>();
+    let batchEnriched = 0;
+    for (const [idx, r] of backfillEnrichResults(looseItems(raw), offset, batch.length)) {
+      const it = fresh[idx];
+      if (!it) continue;
+      if (!r.keep) {
+        dropped.add(it.url);
+        continue;
+      }
+      const has = !!(it.summary && it.summary.trim());
+      store[it.url] = {
+        tag: r.tag as JiangxiTag,
+        summaryZh: has ? r.summaryZh.trim() || null : null,
+        points: has ? r.pointsZh.map((p) => p.trim()).filter(Boolean).slice(0, 3) : [],
+        relevance: r.relevance.trim(),
+        actionNeeded: r.actionNeeded.trim(),
+      };
+      batchEnriched++;
+    }
+    for (const url of dropped) delete store[url];
+    // Mark dropped items so they are excluded below: keep a tombstone list.
+    if (dropped.size > 0) {
       const tomb = (await readCacheStale<string[]>(ctx, "jiangxi:dropped:v1"))?.data ?? [];
       await writeCache(ctx, "jiangxi:dropped:v1", [...new Set([...tomb, ...dropped])]);
-    } catch {
-      // fallback entries are built below for anything still missing
+    }
+    // Save this batch's results NOW: the old code only wrote the store at
+    // the end of the load, so a kill mid-run lost every finished batch.
+    if (batchEnriched > 0 || dropped.size > 0) {
+      await writeCache(ctx, "jiangxi:enrich:v1", boundedEnrichStore(store, deduped.map((d) => d.url)));
+      await markColumnEnrichSuccess(ctx, "jiangxi");
     }
   };
   const batches: FeedItem[][] = [];
   for (let s = 0; s < fresh.length; s += 5) batches.push(fresh.slice(s, s + 5));
   // Serial, paced (2026-11-23): one batch at a time with a pause between
-  // batches — see the pacing note at completeEnrichment.
+  // batches — see the pacing note at completeEnrichment. Out of budget:
+  // stop starting batches; the rest stay fresh for the next run.
   for (const [bi, b] of batches.entries()) {
+    if (!budgetCanStartBatch(budget)) break;
     if (bi > 0) await sleepMs(ENRICH_BATCH_GAP_MS);
     await enrichBatch(b, bi * 5);
   }
@@ -2189,12 +2531,7 @@ async function loadJiangxi(ctx: Ctx, force: boolean): Promise<{ items: JiangxiIt
   // fixJiangxiList runs again on every getJiangxi read.
   const fixedItems = fixJiangxiList(items);
 
-  const bounded: Record<string, JiangxiEnrichEntry> = {};
-  for (const [url, e] of Object.entries(store)) {
-    if (Object.keys(bounded).length >= 200) break;
-    bounded[url] = e;
-  }
-  await writeCache(ctx, "jiangxi:enrich:v1", bounded);
+  await writeCache(ctx, "jiangxi:enrich:v1", boundedEnrichStore(store, deduped.map((d) => d.url)));
   const asOf = await writeCache(ctx, "jiangxi:all:v4", fixedItems);
   return { items: fixedItems, asOf };
 }
@@ -2688,7 +3025,7 @@ const CURATED_VISA_URLS = new Set(CURATED_VISA_ITEMS.map((it) => it.url));
  */
 const PINNED_VISA_BLOCKED_HOSTS = ["dayonekorea.com", "gistreel.com"];
 
-const PINNED_VISA_KEY = "overseas:visa:pinned:v9";
+const PINNED_VISA_KEY = "overseas:visa:pinned:v10";
 /** Non-curated pinned visa items expire this long after their publish date. */
 const PINNED_VISA_MAX_AGE_MS = 365 * 24 * 3600 * 1000;
 
@@ -2982,7 +3319,8 @@ async function mergePinnedVisaItems(ctx: Ctx, discovered: OverseasItem[]): Promi
       isNzPswvEventText(text) ||
       isUkGraduateCutEventText(text) ||
       isJpLanguageSchoolEventText(text) ||
-      isKrTechPilotEventText(text)
+      isKrTechPilotEventText(text) ||
+      isSgWorkPassEventText(text)
     )
       return false;
     if (!it.publishedAt) return true;
@@ -3163,6 +3501,21 @@ function isKrTechPilotEventText(text: string): boolean {
   return kr && pilot;
 }
 
+/**
+ * True when text retells the Singapore work-pass salary-threshold rise
+ * carried once by SG_WORK_PASS_ITEM (the MOM factsheet: EP S$5,600→S$6,000
+ * and S Pass S$3,300→S$3,600 for new applications from 2027-01-01, renewals
+ * expiring from 2028-01-01). Roundups that fold the EP threshold rise into a
+ * general "Singapore study policy update" retell this same event — one
+ * event, one entry, and the entry is the MOM official document.
+ */
+function isSgWorkPassEventText(text: string): boolean {
+  const sg = /(新加坡|singapore)/i.test(text);
+  const pass = /(EP\b|就业准证|employment pass|S\s*准证|S Pass)/i.test(text);
+  const rise = /(门槛|上调|提高|调高|薪资|salary|threshold|6,?000|3,?600)/i.test(text);
+  return sg && pass && rise;
+}
+
 /** The UK student-visa funds item aimed at African applicants — irrelevant to a Chinese 专科 student. */
 function isUkAfricaFundsItem(it: FeedItem): boolean {
   const hay = `${it.title} ${it.summary ?? ""}`;
@@ -3240,39 +3593,43 @@ const OVERSEAS_VISA_QUERIES = [
   "UK Graduate visa student visa changes 2027",
 ];
 
-const overseasEnrichSchema = z.object({
-  items: z.array(
-    z.object({
-      id: z.number(),
-      keep: z.boolean().catch(false),
-      country: z.string().catch("其他"),
-      whatChanged: z.string().catch(""),
-      whoApplies: z.string().catch(""),
-      effectiveWhen: z.string().nullable().catch(null),
-      eligibility: z.enum(["diploma_eligible", "unclear", "bachelor_only"]).catch("unclear"),
-      isImmigration: z.boolean().catch(false),
-      identityLabel: z.string().nullable().catch(null),
-      pointsZh: z.array(z.string()).catch([]),
-      visa: z.boolean().catch(false),
-      category: z.enum(["study", "work_visa"]).catch("study"),
-      stage: z.enum(["prepare", "diploma", "bachelor", "intern", "direct", "overseas_job", "general"]).catch("general"),
-      kind: z.enum(["news", "job", "policy"]).catch("news"),
-      majorMatch: z.string().nullable().catch(null),
-      languageReq: z.string().nullable().catch(null),
-      deadline: z.string().nullable().catch(null),
-      tuition: z.string().nullable().catch(null),
-      livingCost: z.string().nullable().catch(null),
-      scholarship: z.string().nullable().catch(null),
-      location: z.string().nullable().catch(null),
-      remoteFromChina: z.boolean().nullable().catch(null),
-      eduReq: z.string().nullable().catch(null),
-      expReq: z.string().nullable().catch(null),
-      acceptsOverseas: z.boolean().nullable().catch(null),
-      visaSupport: z.enum(["yes", "no", "unstated"]).catch("unstated"),
-      policyStatus: z.enum(["enacted", "proposal", "unstated"]).nullable().catch(null),
-    }),
-  ),
+const overseasEnrichItemSchema = z.object({
+  id: z.number(),
+  keep: z.boolean().catch(false),
+  country: z.string().catch("其他"),
+  whatChanged: z.string().catch(""),
+  whoApplies: z.string().catch(""),
+  effectiveWhen: z.string().nullable().catch(null),
+  eligibility: z.enum(["diploma_eligible", "unclear", "bachelor_only"]).catch("unclear"),
+  isImmigration: z.boolean().catch(false),
+  identityLabel: z.string().nullable().catch(null),
+  pointsZh: z.array(z.string()).catch([]),
+  visa: z.boolean().catch(false),
+  category: z.enum(["study", "work_visa"]).catch("study"),
+  stage: z.enum(["prepare", "diploma", "bachelor", "intern", "direct", "overseas_job", "general"]).catch("general"),
+  kind: z.enum(["news", "job", "policy"]).catch("news"),
+  majorMatch: z.string().nullable().catch(null),
+  languageReq: z.string().nullable().catch(null),
+  deadline: z.string().nullable().catch(null),
+  tuition: z.string().nullable().catch(null),
+  livingCost: z.string().nullable().catch(null),
+  scholarship: z.string().nullable().catch(null),
+  location: z.string().nullable().catch(null),
+  remoteFromChina: z.boolean().nullable().catch(null),
+  eduReq: z.string().nullable().catch(null),
+  expReq: z.string().nullable().catch(null),
+  acceptsOverseas: z.boolean().nullable().catch(null),
+  visaSupport: z.enum(["yes", "no", "unstated"]).catch("unstated"),
+  policyStatus: z.enum(["enacted", "proposal", "unstated"]).nullable().catch(null),
 });
+
+export const overseasEnrichSchema = z.object({
+  items: z.array(overseasEnrichItemSchema),
+});
+
+// Loose contract (p-round, 2026-11-23): strict object OR a bare array of
+// the same items — see the note on learningEnrichLooseSchema.
+export const overseasEnrichLooseSchema = z.union([overseasEnrichSchema, z.array(overseasEnrichItemSchema)]);
 
 interface OverseasEnrichEntry {
   country: string;
@@ -3347,9 +3704,13 @@ function overseasHomepageItems(items: OverseasItem[]): OverseasItem[] {
   );
 }
 
-async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: OverseasItem[]; asOf: string }> {
+async function loadOverseas(
+  ctx: Ctx,
+  force: boolean,
+  budget: RunBudget = newRunBudget(),
+): Promise<{ items: OverseasItem[]; asOf: string }> {
   if (!force) {
-    const cached = await readCache<OverseasItem[]>(ctx, "overseas:all:v19", OVERSEAS_TTL_MS);
+    const cached = await readCache<OverseasItem[]>(ctx, "overseas:all:v20", OVERSEAS_TTL_MS);
     if (cached) return { items: overseasHomepageItems(cached.data), asOf: cached.asOf };
   }
   const raw: FeedItem[] = [];
@@ -3397,7 +3758,8 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
         isNzPswvEventText(hay) ||
         isUkGraduateCutEventText(hay) ||
         isJpLanguageSchoolEventText(hay) ||
-        isKrTechPilotEventText(hay)
+        isKrTechPilotEventText(hay) ||
+        isSgWorkPassEventText(hay)
       )
         return false;
       // UK visa-funds item written for African applicants — not relevant here.
@@ -3423,11 +3785,11 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
 
   if (deduped.length === 0) {
     await noteRefreshFailure(ctx);
-    const stale = await readCacheStale<OverseasItem[]>(ctx, "overseas:all:v19");
+    const stale = await readCacheStale<OverseasItem[]>(ctx, "overseas:all:v20");
     if (stale) return { items: overseasHomepageItems(stale.data), asOf: stale.asOf };
     // Even with no fresh search results, the fixed visa zone stands.
     const pinnedOnly = await mergePinnedVisaItems(ctx, []);
-    const asOf = await writeCache(ctx, "overseas:all:v19", pinnedOnly);
+    const asOf = await writeCache(ctx, "overseas:all:v20", pinnedOnly);
     return { items: pinnedOnly, asOf };
   }
 
@@ -3479,26 +3841,36 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
       const db = ctx.db;
       const rows = await db.select().from(schema.cacheSnapshots).where(eq(schema.cacheSnapshots.key, "meta:status")).limit(1);
       const prev = rows[0] ? (JSON.parse(rows[0].payload) as Record<string, unknown>) : {};
+      const columns = (prev.columns as Record<string, ColumnStatus> | undefined) ?? {};
+      const cur = columns.overseas ?? { ...EMPTY_COLUMN_STATUS };
+      columns.overseas = {
+        ...cur,
+        error: `海外栏摘要：${(e instanceof Error ? `${e.name}: ${e.message}` : String(e)).slice(0, 400)}`,
+        errorAt: new Date().toISOString(),
+        recovered: false,
+      };
       await writeCache(ctx, "meta:status", {
         ...prev,
         enrichError: `海外栏摘要：${(e instanceof Error ? `${e.name}: ${e.message}` : String(e)).slice(0, 400)}`,
         enrichErrorAt: new Date().toISOString(),
+        columns,
       });
     } catch {
       // bookkeeping only — never break a load over it
     }
   };
+  // Whether the loose (object-or-array) contract is still in use for this
+  // run — see the learning column's note on the union-schema fallback.
+  let looseSchemaOk = true;
   const enrichBatch = async (batch: FeedItem[], offset: number): Promise<void> => {
+    if (!budgetCanStartBatch(budget)) return;
     const listing = batch
       .map((it, j) => {
         const has = !!(it.summary && it.summary.trim());
         return `[${offset + j}] 来源:${it.source} | 标题:${it.title} | 摘要:${has ? (it.summary as string).slice(0, 200) : "（无摘要，仅有标题）"}`;
       })
       .join("\n");
-    try {
-      const result = await completeEnrichment(() =>
-        completeInference(ctx, 
-        `你在为一位中国专科（大专）学生（信息安全技术应用专业，预计 2028 年毕业）筛选「海外机会与政策变化」。只保留会改变他决策的消息：某校开始接受中国大专学历申请、学分认定/转学分变化、面向专科生的奖学金开放、学生签证要求调整、影响留学生的安全提醒。逐条判断：\n` +
+    const prompt = `你在为一位中国专科（大专）学生（信息安全技术应用专业，预计 2028 年毕业）筛选「海外机会与政策变化」。只保留会改变他决策的消息：某校开始接受中国大专学历申请、学分认定/转学分变化、面向专科生的奖学金开放、学生签证要求调整、影响留学生的安全提醒。逐条判断：\n` +
           `- keep：符合上面任一类才 true。留学中介广告、论坛帖子、泛泛的留学介绍、与专科生无关的普通新闻 keep=false。评论、观点、社论类文章（opinion/commentary/editorial）不是政策变化本身，哪怕评论的正是学生签证政策，keep=false。只面向其他国家或地区申请人（例如仅面向非洲申请人）、与中国学生无关的条目 keep=false。注意：标题里「X国留学生／X国申请人」的 X 是申请人国籍，不是留学目的地——例如《越南留学生如何在加拿大申请留学》讲的是越南籍申请人，目的地是加拿大，与中国申请人无关，keep=false；反过来讲去越南留学、越南学生签证规则的条目，越南是目的地，不要按申请人国籍误判。跟踪国家只有：美国、新西兰、新加坡、越南、日本、韩国、爱尔兰、英国；其他国家 keep=false。\n` +
           `- country：从这八个国家里选一个最贴切的中文名；实在判断不了填「其他」。\n` +
           `- whatChanged：一句中文说明变了什么，只能依据摘要已有信息；无摘要留空字符串，绝不根据标题猜。\n` +
@@ -3513,70 +3885,89 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
           `- kind：具体的招聘岗位填 job；政府发布的工作许可、签证或移民政策填 policy（政策不是岗位，绝不能标成 job）；其他填 news。\n` +
           `- majorMatch / languageReq / deadline / tuition / livingCost / scholarship：只填摘要明确写出的内容，金额保留原币种并注明按年还是整个项目（如「NZ$32,000/年」）；摘要没写的填 null，绝不估算或编造。deadline 只填摘要明确写出的申请截止说法。\n` +
           `- 岗位类（kind=job）再填 location（工作地点）、remoteFromChina（能否在中国境内远程参加，摘要没写填 null）、eduReq（学历要求）、expReq（经验要求）、acceptsOverseas（是否接受境外申请，没写填 null）、visaSupport（雇主明确提供签证支持填 yes，明确不提供填 no，没写填 unstated）。\n` +
-          `- 政策类（kind=policy）再填 policyStatus：已生效填 enacted，只是提案/计划/拟议填 proposal，没写清填 unstated。\n\n${listing}`,
-        { schema: overseasEnrichSchema, timeout_secs: 110 },
-        ),
+          `- 政策类（kind=policy）再填 policyStatus：已生效填 enacted，只是提案/计划/拟议填 proposal，没写清填 unstated。\n\n只返回一个 JSON 对象，形状固定为 {"items":[...]}，不要输出其他任何文字；每条结果保留输入编号对应的 id（即 [n] 中的 n），结果顺序可以与输入不同。\n\n${listing}`;
+    const attempt = async (schema: typeof overseasEnrichSchema | typeof overseasEnrichLooseSchema) =>
+      completeEnrichment(
+        (timeoutSecs) => completeInference(ctx, prompt, { schema, timeout_secs: timeoutSecs }),
+        budget,
       );
-      result.items.forEach((r, j) => {
-        const idx = r.id >= offset && r.id < offset + batch.length ? r.id : offset + j;
-        const it = fresh[idx];
-        if (!it) return;
-        const has = !!(it.summary && it.summary.trim());
-        const existing = store[it.url];
-        const newWhat = has ? r.whatChanged.trim() || null : null;
-        // A retry that still yields no Chinese summary must not erase a
-        // previously stored good one.
-        if (r.keep && existing?.keep && existing.whatChanged && !newWhat) return;
-        store[it.url] = {
-          country: r.country.trim() || "其他",
-          whatChanged: newWhat,
-          whoApplies: r.whoApplies.trim() || null,
-          effectiveWhen: r.effectiveWhen?.trim() ? r.effectiveWhen.trim() : null,
-          eligibility: r.eligibility,
-          isImmigration: r.isImmigration,
-          identityLabel: r.isImmigration ? r.identityLabel?.trim() || "适用身份见原文" : null,
-          points: has ? r.pointsZh.map((p) => p.trim()).filter(Boolean).slice(0, 3) : [],
-          keep: r.keep,
-          visa: r.visa,
-          category: r.category,
-          stage: r.stage,
-          kind: r.kind,
-          majorMatch: r.majorMatch?.trim() || null,
-          languageReq: r.languageReq?.trim() || null,
-          deadline: r.deadline?.trim() || null,
-          tuition: r.tuition?.trim() || null,
-          livingCost: r.livingCost?.trim() || null,
-          scholarship: r.scholarship?.trim() || null,
-          location: r.location?.trim() || null,
-          remoteFromChina: r.remoteFromChina,
-          eduReq: r.eduReq?.trim() || null,
-          expReq: r.expReq?.trim() || null,
-          acceptsOverseas: r.acceptsOverseas,
-          visaSupport: r.visaSupport,
-          policyStatus: r.policyStatus,
-        };
-      });
+    let raw: z.infer<typeof overseasEnrichLooseSchema>;
+    try {
+      raw = looseSchemaOk ? await attempt(overseasEnrichLooseSchema) : await attempt(overseasEnrichSchema);
     } catch (e) {
-      // Small-batch retry: a timed-out batch is split in half and retried,
-      // down to single items. An item that still fails stays unstored (or
-      // keeps its previous entry), so the next refresh retries it instead
-      // of serving a guessed or half-finished Chinese summary.
-      await recordOverseasEnrichError(e);
-      if (batch.length > 1) {
-        const mid = Math.ceil(batch.length / 2);
-        await enrichBatch(batch.slice(0, mid), offset);
-        await sleepMs(ENRICH_BATCH_GAP_MS);
-        await enrichBatch(batch.slice(mid), offset + mid);
+      if (looseSchemaOk && isSchemaContractError(e)) {
+        looseSchemaOk = false;
+        try {
+          raw = await attempt(overseasEnrichSchema);
+        } catch (e2) {
+          await recordOverseasEnrichError(e2);
+          return;
+        }
+      } else {
+        await recordOverseasEnrichError(e);
+        return;
       }
+    }
+    // p-round, 2026-11-23: a failed batch ends at once — deterministic
+    // errors never retry, 429s retry once inside completeEnrichment when
+    // the budget allows, and there is no split-half retry any more. Items
+    // stay fresh, so the next run resumes from them.
+    let batchEnriched = 0;
+    for (const [idx, r] of backfillEnrichResults(looseItems(raw), offset, batch.length)) {
+      const it = fresh[idx];
+      if (!it) continue;
+      const has = !!(it.summary && it.summary.trim());
+      const existing = store[it.url];
+      const newWhat = has ? r.whatChanged.trim() || null : null;
+      // A retry that still yields no Chinese summary must not erase a
+      // previously stored good one.
+      if (r.keep && existing?.keep && existing.whatChanged && !newWhat) continue;
+      store[it.url] = {
+        country: r.country.trim() || "其他",
+        whatChanged: newWhat,
+        whoApplies: r.whoApplies.trim() || null,
+        effectiveWhen: r.effectiveWhen?.trim() ? r.effectiveWhen.trim() : null,
+        eligibility: r.eligibility,
+        isImmigration: r.isImmigration,
+        identityLabel: r.isImmigration ? r.identityLabel?.trim() || "适用身份见原文" : null,
+        points: has ? r.pointsZh.map((p) => p.trim()).filter(Boolean).slice(0, 3) : [],
+        keep: r.keep,
+        visa: r.visa,
+        category: r.category,
+        stage: r.stage,
+        kind: r.kind,
+        majorMatch: r.majorMatch?.trim() || null,
+        languageReq: r.languageReq?.trim() || null,
+        deadline: r.deadline?.trim() || null,
+        tuition: r.tuition?.trim() || null,
+        livingCost: r.livingCost?.trim() || null,
+        scholarship: r.scholarship?.trim() || null,
+        location: r.location?.trim() || null,
+        remoteFromChina: r.remoteFromChina,
+        eduReq: r.eduReq?.trim() || null,
+        expReq: r.expReq?.trim() || null,
+        acceptsOverseas: r.acceptsOverseas,
+        visaSupport: r.visaSupport,
+        policyStatus: r.policyStatus,
+      };
+      batchEnriched++;
+    }
+    // Save this batch's results NOW: the old code only wrote the store at
+    // the end of the load, so a kill mid-run lost every finished batch.
+    if (batchEnriched > 0) {
+      await writeCache(ctx, "overseas:enrich:v2", boundedEnrichStore(store, resolved.map((d) => d.url)));
+      await markColumnEnrichSuccess(ctx, "overseas");
     }
   };
   // Batches of 3, run sequentially: the 08:02 timeout came from larger
   // parallel batches; small sequential batches are slower but finish.
   // Since 2026-11-23 they are also paced with a pause between batches —
-  // see the pacing note at completeEnrichment.
+  // see the pacing note at completeEnrichment. Out of budget: stop
+  // starting batches; the rest stay fresh for the next run.
   const batches: FeedItem[][] = [];
   for (let s = 0; s < fresh.length; s += 3) batches.push(fresh.slice(s, s + 3));
   for (const [bi, b] of batches.entries()) {
+    if (!budgetCanStartBatch(budget)) break;
     if (bi > 0) await sleepMs(ENRICH_BATCH_GAP_MS);
     await enrichBatch(b, bi * 3);
   }
@@ -3702,13 +4093,8 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
   );
   const all = [...pinned, ...rotating];
 
-  const bounded: Record<string, OverseasEnrichEntry> = {};
-  for (const [url, e] of Object.entries(store)) {
-    if (Object.keys(bounded).length >= 200) break;
-    bounded[url] = e;
-  }
-  await writeCache(ctx, "overseas:enrich:v2", bounded);
-  const asOf = await writeCache(ctx, "overseas:all:v19", all);
+  await writeCache(ctx, "overseas:enrich:v2", boundedEnrichStore(store, resolved.map((d) => d.url)));
+  const asOf = await writeCache(ctx, "overseas:all:v20", all);
   return { items: all, asOf };
 }
 
@@ -3917,6 +4303,7 @@ const learningItemSchema = z.object({
   deadline: z.string().nullable(),
   needsApplication: z.boolean(),
   relevance: z.string(),
+  enrichState: z.enum(["new", "stored", "original"]).catch("original"),
 });
 
 const jiangxiItemSchema = z.object({
@@ -4365,6 +4752,10 @@ function normalizeLearning(it: LearningItem): z.infer<typeof learningItemSchema>
     summaryZh,
     points,
     relevance: summaryZh ?? "点开看适合谁、能学到什么；学段、费用和截止日期都以官方入口为准。",
+    // Payloads cached before the p-round carry no enrichState: a stored
+    // Chinese summary means an earlier enrichment ("stored"), otherwise
+    // the item is showing its original text.
+    enrichState: fixed.enrichState ?? (summaryZh ? "stored" : "original"),
   };
 }
 
@@ -4604,7 +4995,8 @@ export const Actions = {
   }),
 
   getStatus: defineAction({
-    description: "Returns the last successful refresh time across all caches and the daily refresh schedule.",
+    description:
+      "Returns the last successful refresh time across all caches and the daily refresh schedule, plus per-column status (content time, enrichment success time, latest enrichment error and whether it has recovered) so the page can answer which column updated.",
     request: z.object({}),
     response: z.object({
       lastUpdatedAt: z.string().nullable(),
@@ -4613,6 +5005,11 @@ export const Actions = {
       refreshTimeLabel: z.string(),
       refreshTimezone: z.string(),
       refreshScheduleLabel: z.string(),
+      columns: z.object({
+        learning: columnStatusSchema,
+        jiangxi: columnStatusSchema,
+        overseas: columnStatusSchema,
+      }),
     }),
     async handler(ctx) {
       const db = ctx.db;
@@ -4620,16 +5017,46 @@ export const Actions = {
       let max: Date | null = null;
       let lastFailureAt: string | null = null;
       let enrichError: string | null = null;
+      const columns: Record<ColumnKey, ColumnStatus> = {
+        learning: { ...EMPTY_COLUMN_STATUS },
+        jiangxi: { ...EMPTY_COLUMN_STATUS },
+        overseas: { ...EMPTY_COLUMN_STATUS },
+      };
+      // Each column's content time is its own cache row's write time.
+      const contentKey: Record<ColumnKey, string> = {
+        learning: "learning:all:v2",
+        jiangxi: "jiangxi:all:v4",
+        overseas: "overseas:all:v20",
+      };
       for (const r of rows) {
         if (r.key === "meta:status") {
           try {
-            const meta = JSON.parse(r.payload) as { lastFailureAt?: string; enrichError?: string };
+            const meta = JSON.parse(r.payload) as {
+              lastFailureAt?: string;
+              enrichError?: string;
+              columns?: Record<string, ColumnStatus>;
+            };
             lastFailureAt = meta.lastFailureAt ?? null;
             enrichError = meta.enrichError ?? null;
+            for (const k of ["learning", "jiangxi", "overseas"] as const) {
+              const saved = meta.columns?.[k];
+              if (saved) {
+                columns[k] = {
+                  ...columns[k],
+                  enrichAt: saved.enrichAt ?? null,
+                  error: saved.error ?? null,
+                  errorAt: saved.errorAt ?? null,
+                  recovered: saved.recovered ?? false,
+                };
+              }
+            }
           } catch {
             lastFailureAt = null;
           }
           continue;
+        }
+        for (const k of ["learning", "jiangxi", "overseas"] as const) {
+          if (r.key === contentKey[k]) columns[k].contentAt = r.fetchedAt.toISOString();
         }
         // Only content caches count as a successful update (not detail lookups).
         if (!/^(news:|feed:|learning:|jiangxi:|overseas:|world:|hot:)/.test(r.key)) continue;
@@ -4643,6 +5070,7 @@ export const Actions = {
         refreshTimeLabel: "08:02",
         refreshTimezone: "Asia/Shanghai",
         refreshScheduleLabel: "每天 08:02 · Asia/Shanghai (UTC+8)",
+        columns,
       };
     },
   }),
@@ -5132,23 +5560,42 @@ export const Actions = {
     request: z.object({}),
     response: z.object({ ok: z.literal(true), refreshedAt: z.string() }),
     async handler(ctx): Promise<{ ok: true; refreshedAt: string }> {
+      // One shared run budget for the whole execution (p-round, 2026-11-23):
+      // 55s, targeting the 60s self-hosted function cap, with time reserved
+      // for cache writes. Each column's enrichment loop gates every batch
+      // on the remaining budget and derives its per-call timeout from it,
+      // so a slow learning column can no longer starve the columns after
+      // it — unfinished items stay fresh and the next run resumes them.
+      const budget = newRunBudget();
+      // Column isolation: a slow or failing column must not block the
+      // others — each still gets its own refresh chance and writes its own
+      // cache. Failures are recorded per column (see getStatus) and by
+      // noteRefreshFailure inside the loaders; the run still reports ok so
+      // one column's failure cannot hide the others' fresh caches.
+      const runColumn = async (fn: () => Promise<unknown>): Promise<void> => {
+        try {
+          await fn();
+        } catch {
+          // isolated — the next column still runs
+        }
+      };
       // Learning first: its model enrichment is the slowest, most
       // deadline-sensitive step, so it must not queue behind nine sequential
       // category fetches (that ordering is what starved it of inference time).
-      await loadLearning(ctx, true);
+      await runColumn(() => loadLearning(ctx, true, budget));
       // The other two model-enriched columns also run one after another,
       // never in parallel with each other (2026-11-23 pacing — see
       // completeEnrichment); 我关注的世界 and the hot lists make no model
       // calls and still load together. Every column keeps writing its own
       // cache the moment it finishes.
-      await loadJiangxi(ctx, true);
-      await loadOverseas(ctx, true);
-      await Promise.all([loadMyWorld(ctx, true), loadHotLists(ctx, true)]);
-      await Promise.all(CATEGORIES.map((cat) => loadCategory(ctx, cat.id, true)));
+      await runColumn(() => loadJiangxi(ctx, true, budget));
+      await runColumn(() => loadOverseas(ctx, true, budget));
+      await runColumn(() => Promise.all([loadMyWorld(ctx, true), loadHotLists(ctx, true)]));
+      await runColumn(() => Promise.all(CATEGORIES.map((cat) => loadCategory(ctx, cat.id, true))));
       const db = ctx.db;
       const subs = await db.select().from(schema.subscriptions);
       for (const s of subs) {
-        await loadFeedItems(ctx, s.feedKey, s.name, s.url, true);
+        await runColumn(() => loadFeedItems(ctx, s.feedKey, s.name, s.url, true));
       }
       ctx.invalidateQueries();
       return { ok: true, refreshedAt: new Date().toISOString() };

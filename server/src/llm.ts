@@ -9,6 +9,27 @@
 
 import { z } from "zod";
 
+/**
+ * Thrown when a model call fails deterministically — a JSON parse failure,
+ * a schema failure after array→{items} wrapping, or an empty response.
+ * The caller's enrichment loop must NOT retry these (no split-half, no
+ * backoff): the batch ends at once and keeps the previous summary /
+ * original text. (p-round, 2026-11-23.)
+ */
+export class EnrichDeterministicError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EnrichDeterministicError";
+  }
+}
+
+/** True for errors that must never be retried (see EnrichDeterministicError). */
+export function isDeterministicEnrichError(e: unknown): boolean {
+  if (e instanceof EnrichDeterministicError) return true;
+  const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+  return /zoderror|schema|validation|failed to parse|json|not configured|未配置|empty response/i.test(msg);
+}
+
 export interface Inference {
   complete<T extends z.ZodTypeAny>(
     prompt: string,
@@ -52,7 +73,29 @@ export function createInference(): Inference | null {
         if (typeof text !== "string" || !text.trim()) {
           throw new Error("LLM returned an empty response");
         }
-        return schema.parse(JSON.parse(text)) as z.infer<typeof schema>;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          throw new EnrichDeterministicError(`LLM 返回的不是合法 JSON: ${text.slice(0, 200)}`);
+        }
+        // Bare top-level array tolerance (p-round, 2026-11-23): Gemini's
+        // OpenAI-compat layer ignores the json_object constraint and
+        // returns a bare array for the batch prompts; wrap it as
+        // {"items": [...]} before validating. Only wrap for {"items": [...]}
+        // schemas (the three batch calls); the single-item detail call
+        // keeps its own schema and is unaffected.
+        try {
+          const isItemsSchema = schema instanceof z.ZodObject && "items" in schema.shape;
+          if (Array.isArray(parsed) && isItemsSchema) parsed = { items: parsed };
+        } catch {
+          if (Array.isArray(parsed)) parsed = { items: parsed };
+        }
+        try {
+          return schema.parse(parsed) as z.infer<typeof schema>;
+        } catch (e) {
+          throw new EnrichDeterministicError(e instanceof Error ? e.message : String(e));
+        }
       } finally {
         clearTimeout(timer);
       }

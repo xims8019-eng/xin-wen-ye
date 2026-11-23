@@ -321,6 +321,13 @@ function LearningRow({ item }: { item: LearningItem }) {
           </p>
           <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-[var(--dim)]">
             <span className="rounded-full border border-[var(--border)] px-2 py-0.5 font-medium text-[var(--text)]">{catLabel}</span>
+            {!item.titleOnly && item.enrichState === "new" ? (
+              <span className="rounded-full bg-[var(--accent)] px-2 py-0.5 font-medium text-white">本次新整理</span>
+            ) : !item.titleOnly && item.enrichState === "stored" ? (
+              <span className="rounded-full bg-[var(--space-surface-alt)] px-2 py-0.5 font-medium text-[var(--text)]">已整理</span>
+            ) : !item.titleOnly ? (
+              <span className="rounded-full border border-[var(--border)] px-2 py-0.5 font-medium text-[var(--dim)]">原文展示</span>
+            ) : null}
             <span className="font-medium text-[var(--text)]">{item.source}</span>
             {item.publishedAt ? (
               <span>
@@ -1620,6 +1627,25 @@ export function App() {
             </button>
           </div>
           <p className="mt-0.5 text-center text-[11px] text-[var(--dim)]">定时刷新：{scheduleLabel}</p>
+          {status.data?.columns ? (
+            <p className="mt-0.5 text-center text-[11px] text-[var(--dim)]">
+              {(
+                [
+                  ["学习", status.data.columns.learning],
+                  ["江西", status.data.columns.jiangxi],
+                  ["海外", status.data.columns.overseas],
+                ] as const
+              ).map(([label, c], i) => (
+                <span key={label}>
+                  {i > 0 ? " · " : null}
+                  {label} 更新 {c.contentAt ? clockTime(c.contentAt) : "—"}
+                  {c.enrichAt ? ` · 整理 ${clockTime(c.enrichAt)}` : " · 未整理"}
+                  {c.error ? " · 整理出错" : null}
+                  {c.recovered ? " · 已恢复" : null}
+                </span>
+              ))}
+            </p>
+          ) : null}
           {showFailure && lastFailureLabel ? (
             <p className="mt-0.5 text-center text-[11px] font-medium text-[var(--accent)]">
               最近一次更新失败：{lastFailureLabel}，当前显示的是上一版内容
