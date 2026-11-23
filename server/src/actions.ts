@@ -81,11 +81,91 @@ function decodeEntities(s: string): string {
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
-    .replace(/&#0?39;/g, "'")
     .replace(/&apos;/g, "'")
     .replace(/&nbsp;/g, " ")
+    .replace(/&middot;/g, "·")
+    .replace(/&pound;/g, "£")
+    .replace(/&hellip;/g, "…")
+    .replace(/&mdash;/g, "—")
+    .replace(/&ndash;/g, "–")
+    .replace(/&lsquo;/g, "‘")
+    .replace(/&rsquo;/g, "’")
+    .replace(/&ldquo;/g, "“")
+    .replace(/&rdquo;/g, "”")
+    // Numeric character references — decimal (&#163; → £, &#183; → ·) and
+    // hex (&#xA3;). Titles arriving from feeds and search results carry
+    // these raw; they must be decoded before display, never shown as-is.
+    .replace(/&#x([0-9a-fA-F]{1,6});/g, (m, hex: string) => {
+      const cp = parseInt(hex, 16);
+      return cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : m;
+    })
+    .replace(/&#(\d{1,7});/g, (m, dec: string) => {
+      const cp = parseInt(dec, 10);
+      return cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : m;
+    })
     .replace(/&amp;/g, "&")
     .trim();
+}
+
+/**
+ * Truncate at a word/sentence boundary (user rule, 2026-11-22): a summary
+ * or relevance line must never be cut mid-word ("international studen",
+ * "struggle t"). When the text exceeds `max`, walk back from the cut to
+ * the last sentence end (。！？.!?；;) or, failing that, the last space —
+ * shorter is fine, a half word is not. Deterministic; used everywhere a
+ * slice() used to bite, with or without a model in the loop.
+ */
+function truncateAtBoundary(text: string, max: number): string {
+  const t = text.trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const sentenceEnd = Math.max(
+    cut.lastIndexOf("。"),
+    cut.lastIndexOf("！"),
+    cut.lastIndexOf("？"),
+    cut.lastIndexOf("；"),
+    cut.lastIndexOf("; "),
+  );
+  if (sentenceEnd >= Math.floor(max * 0.45)) return cut.slice(0, sentenceEnd + 1).trim();
+  const lastSpace = cut.lastIndexOf(" ");
+  if (lastSpace >= Math.floor(max * 0.45)) return cut.slice(0, lastSpace).trim();
+  // Chinese text has no spaces: a character boundary IS a word-safe cut.
+  if (!/[A-Za-z]/.test(cut.slice(-12))) return cut.trim();
+  return cut.slice(0, Math.floor(max * 0.7)).trim();
+}
+
+/**
+ * Repair a stored string that an older slice() already cut mid-word:
+ * when the text is at/near a known cap length and ends inside a Latin
+ * word, drop the trailing partial word. Full sentences end with
+ * punctuation and are untouched.
+ */
+function trimPartialTailWord(text: string, capHint: number): string {
+  if (text.length < capHint - 6) return text;
+  if (!/[A-Za-z0-9]$/.test(text)) return text;
+  const lastSpace = text.lastIndexOf(" ");
+  if (lastSpace < Math.floor(text.length * 0.5)) return text;
+  return text.slice(0, lastSpace).trim();
+}
+
+/**
+ * One entry, one saying (user rule, 2026-11-22): the same sentence must
+ * never appear twice inside one item's points (the UNSW scholarship item
+ * carried its own lede sentence twice). Comparison ignores surrounding
+ * whitespace and trailing sentence punctuation.
+ */
+function dedupeSentences(points: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of points) {
+    const trimmed = p.trim();
+    if (!trimmed) continue;
+    const key = trimmed.replace(/[\s。．.!！?？；;，,、：:]+$/u, "").replace(/\s+/g, " ");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
 }
 
 function stripTags(s: string): string {
@@ -153,7 +233,17 @@ function parseFeed(xml: string, fallbackSource: string, limit: number): FeedItem
           .replace(/在\s*Google\s*新闻上查看更多头条新闻和观点/g, " ")
           .replace(/(?:See|View)\s+more\s+headlines\s+and\s+perspectives\s+on\s+Google\s+News/gi, " ")
       : null;
-    const summary = descClean ? stripTags(descClean).slice(0, 350) || null : null;
+    // A summary must come from THIS item's own source only (user rule,
+    // 2026-11-22): a Google News description is an <ol> of RELATED
+    // headlines from several outlets — stripping the tags splices those
+    // outlets' reports into one fake "summary" whose facts contradict
+    // each other (the Indonesia candy-factory fire carried death tolls
+    // of 6, 3 and 7 from three different reports). A description made of
+    // two or more <li> headlines is a headline list, not a summary: the
+    // item is honestly title-only instead.
+    const liCount = descRaw ? (descRaw.match(/<li[\s>]/gi) ?? []).length : 0;
+    const summary =
+      liCount >= 2 ? null : descClean ? truncateAtBoundary(stripTags(descClean), 350) || null : null;
     const sourceName = tagContent(block, "source") ?? tagContent(block, "News:Source") ?? fallbackSource;
     // Google News appends " - <publisher>" to titles; the source is shown separately.
     const cleanTitle = title.endsWith(` - ${sourceName}`) ? title.slice(0, -(sourceName.length + 3)).trim() : title;
@@ -324,7 +414,7 @@ async function fetchArticleMeta(url: string): Promise<ArticleMeta> {
       html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:name|property)=["'](?:description|og:description|twitter:description)["']/i)?.[1];
     let summary: string | null = null;
     if (metaDesc) {
-      const s = stripTags(metaDesc).slice(0, 300);
+      const s = truncateAtBoundary(stripTags(metaDesc), 300);
       // Reject mojibake: a page served in GBK/GB2312 but decoded as UTF-8
       // yields runs of U+FFFD — that is not a readable description.
       const replacements = (s.match(/�/g) ?? []).length;
@@ -649,7 +739,7 @@ async function loadCategory(ctx: Ctx, categoryId: string, force: boolean): Promi
   // expand back then) and placeholder summaries, and must never be
   // served again — v2 stores publisher-direct addresses only (or no
   // link at all) and never a placeholder summary.
-  const key = `news:${cat.id}:v2`;
+  const key = `news:${cat.id}:v3`;
   if (!force) {
     const cached = await readCache<FeedItem[]>(ctx, key, NEWS_TTL_MS);
     if (cached) return { items: cached.data, asOf: cached.asOf };
@@ -1183,7 +1273,7 @@ async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: Learning
         // Opportunity RSS descriptions often open with background text while
         // the page's own description carries the dates/fees — give the model
         // both so deadline and fee extraction has the real text to work from.
-        it.summary = `${it.summary} ${meta.summary}`.slice(0, 350);
+        it.summary = truncateAtBoundary(`${it.summary} ${meta.summary}`, 350);
       }
       if (meta.officialUrl && meta.officialUrl !== it.url) it.officialHint = meta.officialUrl;
     }),
@@ -1320,7 +1410,7 @@ async function loadLearning(ctx: Ctx, force: boolean): Promise<{ items: Learning
     )
       continue;
     const hasSummary = !!(it.summary && it.summary.trim().length > 0);
-    const fallbackSummaryZh = hasSummary ? (it.summary as string).slice(0, 90) : null;
+    const fallbackSummaryZh = hasSummary ? truncateAtBoundary(it.summary as string, 90) : null;
     const host = hostOf(it.url);
     let officialUrl: string | null = it.officialHint;
     if (!officialUrl && isInstitutionalHost(host)) officialUrl = it.url;
@@ -1476,7 +1566,7 @@ function isTodayShanghai(iso: string | null): boolean {
 
 // --- 江西专升本 -------------------------------------------------------------
 
-type JiangxiTag = "报名" | "考试科目" | "专业对照" | "招生简章" | "其他";
+type JiangxiTag = "报名" | "考试科目" | "专业对照" | "招生简章" | "录取" | "其他";
 
 interface JiangxiItem {
   title: string;
@@ -1521,7 +1611,7 @@ const jiangxiEnrichSchema = z.object({
     z.object({
       id: z.number(),
       keep: z.boolean().catch(true),
-      tag: z.enum(["报名", "考试科目", "专业对照", "招生简章", "其他"]).catch("其他"),
+      tag: z.enum(["报名", "考试科目", "专业对照", "招生简章", "录取", "其他"]).catch("其他"),
       summaryZh: z.string().catch(""),
       pointsZh: z.array(z.string()).catch([]),
       relevance: z.string().catch(""),
@@ -1538,24 +1628,187 @@ interface JiangxiEnrichEntry {
   actionNeeded: string;
 }
 
+/**
+ * Deterministic 江西 tag classifier (user rule, 2026-11-22): the tag is
+ * decided by CONTENT, not by whichever label a model or an older
+ * fallback happened to store — 分数线/录取控制线/投档线/录取结果 →
+ * 「录取」; 报名流程/报名通知/报考 → 「报名」; 考试时间/科目安排/
+ * 准考证 → 「考试科目」(the column's exam bucket). Applied at ingest
+ * and again on every read (fixJiangxiList), so a cached item tagged
+ * 「报名」for a score-line announcement is corrected in place. Returns
+ * null when no content signal matches, leaving the stored tag alone.
+ */
+function jiangxiTagFor(title: string, body: string): JiangxiTag | null {
+  const admitRe = /分数线|录取控制线|投档线|录取结果|录取名单|录取查询|最低录取分数|录取分数/;
+  const majorRe = /专业对照|对应专业|报考专业对照/;
+  const examRe = /考试科目|考试时间|考试安排|科目安排|准考证|考试大纲|考试日程/;
+  const prospectusRe = /招生简章|招生章程|招生计划/;
+  const signupRe = /报名流程|报名通知|报名时间|报名入口|网上报名|报考|报名/;
+  // The title is the item's own strongest statement of what it is: a
+  // headline announcing 考试时间及科目安排 is an exam item even when
+  // its body also mentions 招生章程. Title signals first (admissions
+  // results, major mapping and exam arrangements outrank the rest),
+  // then the same signals in the body.
+  if (admitRe.test(title)) return "录取";
+  if (majorRe.test(title)) return "专业对照";
+  if (examRe.test(title)) return "考试科目";
+  if (prospectusRe.test(title)) return "招生简章";
+  if (signupRe.test(title)) return "报名";
+  if (admitRe.test(body)) return "录取";
+  if (majorRe.test(body)) return "专业对照";
+  if (prospectusRe.test(body)) return "招生简章";
+  if (examRe.test(body)) return "考试科目";
+  if (signupRe.test(body)) return "报名";
+  return null;
+}
+
+/**
+ * Applicable year for past-year material (user rule, 2026-11-22): the
+ * year must be SHOWN — taken from the title, then the summary/points,
+ * then the publish date. Only an item with none of the three stays
+ * unlabelled; an item WITH a publish date never reads 「未注明」.
+ */
+function jiangxiYearFor(it: {
+  title: string;
+  summaryZh: string | null;
+  points: string[];
+  publishedAt: string | null;
+}): string | null {
+  const fromTitle = yearOf(it.title);
+  if (fromTitle) return fromTitle;
+  const pubYear = it.publishedAt ? new Date(it.publishedAt).getFullYear() : null;
+  const fromBody = yearOf(it.summaryZh ?? "") ?? yearOf(it.points.join(" "));
+  if (fromBody) {
+    const n = Number(fromBody.slice(0, 4));
+    // A year buried in the body is the item's year only when it sits
+    // near the publish year — a policy detail like 「2009年以后退役」
+    // inside a 2021 prospectus is not the prospectus's year.
+    if (pubYear === null || Number.isNaN(pubYear) || Math.abs(n - pubYear) <= 2) return fromBody;
+  }
+  if (pubYear !== null && !Number.isNaN(pubYear) && pubYear >= 2020 && pubYear <= 2035)
+    return `${pubYear}年`;
+  return null;
+}
+
+const JIANGXI_FALLBACK_RELEVANCE =
+  "面向江西省普通高校专升本考生，与你 2028 年参加专升本的方向相关；信息安全技术应用专业具体能报哪个本科专业，要以当年公布的专业对照表为准。";
+
+/**
+ * Per-item relevance written from the item's OWN content (user rule,
+ * 2026-11-22): the five visible 江西 items all carried the same
+ * template sentence. Each tag gets a line that names what THIS item
+ * actually is (score line / sign-up steps / subjects / major mapping /
+ * prospectus), with its applicable year when known.
+ */
+function jiangxiRelevanceFor(it: { title: string; tag: JiangxiTag; applicableYear: string | null }): string {
+  const yr = it.applicableYear ? `${it.applicableYear}的` : "";
+  switch (it.tag) {
+    case "录取":
+      return /录取结果|录取名单|录取查询/.test(it.title)
+        ? `这是${yr}江西专升本录取结果类材料，关系到往年录取的实际去向，可先了解你目标院校的录取情况。`
+        : `这是${yr}江西专升本录取分数线材料，关系到你给 2028 年定目标分数时参考的往年录取门槛。`;
+    case "报名":
+      return `这是${yr}江西专升本报名类通知，关系到你 2028 年报名时要走的流程、时间和入口，先熟悉步骤。`;
+    case "考试科目":
+      return /准考证|考试时间|考试安排|考试日程/.test(it.title)
+        ? `这是${yr}江西专升本考试安排类通知，关系到考试时间和准考证等考务事项，先了解往年节奏。`
+        : `这是${yr}江西专升本考试科目类材料，关系到你备考要复习哪些科目，按它规划复习最直接。`;
+    case "专业对照":
+      return `专业对照决定信息安全技术应用能报考哪个本科专业——这是${yr}的材料，与你能不能报、报哪个专业直接相关。`;
+    case "招生简章":
+      return `这是${yr}江西专升本招生简章类材料，列了招生院校、专业与计划，关系到你 2028 年能报哪些学校。`;
+    default:
+      return `这是${yr}江西省普通高校专升本的通用通知，全体考生都要看，与你的报考准备相关。`;
+  }
+}
+
+/**
+ * Read-time + ingest-time correction for the whole 江西 list (user
+ * rules, 2026-11-22): re-derive each item's tag from its content,
+ * fill a missing applicable year from title/summary/publish date,
+ * decode title entities, dedupe points, repair mid-word cuts, and
+ * replace any relevance that is the shared template (or that repeats
+ * another item's relevance verbatim) with a per-item line grounded in
+ * that item's own tag/title/year. Official sources sort first inside
+ * each group （官方原文优先）.
+ */
+function fixJiangxiList(items: JiangxiItem[]): JiangxiItem[] {
+  const relevanceCounts = new Map<string, number>();
+  for (const it of items) {
+    const r = (it.relevance ?? "").trim();
+    if (r) relevanceCounts.set(r, (relevanceCounts.get(r) ?? 0) + 1);
+  }
+  const fixed = items.map((raw) => {
+    const it: JiangxiItem = { ...raw, title: decodeEntities(raw.title) };
+    const tag = jiangxiTagFor(it.title, `${it.summaryZh ?? ""} ${it.points.join(" ")}`) ?? it.tag;
+    let applicableYear = it.applicableYear ?? jiangxiYearFor(it);
+    // A stored year far from the publish year, with no year in the
+    // title, was almost certainly scraped from a policy detail inside
+    // the body (「2009年以后退役」 in a 2021 prospectus) — re-derive it
+    // under the guarded rule instead of displaying the wrong year.
+    if (applicableYear && !yearOf(it.title) && it.publishedAt) {
+      const n = Number(applicableYear.slice(0, 4));
+      const py = new Date(it.publishedAt).getFullYear();
+      if (!Number.isNaN(n) && !Number.isNaN(py) && Math.abs(n - py) > 2) {
+        applicableYear = jiangxiYearFor(it) ?? applicableYear;
+      }
+    }
+    const yearNum = applicableYear ? Number(applicableYear.slice(0, 4)) : null;
+    const relTrim = (it.relevance ?? "").trim();
+    const relevance =
+      !relTrim || relTrim === JIANGXI_FALLBACK_RELEVANCE || (relevanceCounts.get(relTrim) ?? 0) > 1
+        ? jiangxiRelevanceFor({ title: it.title, tag, applicableYear })
+        : it.relevance;
+    return {
+      ...it,
+      tag,
+      applicableYear,
+      relevance,
+      isReference: yearNum !== null ? yearNum < 2028 : it.isReference,
+      noticeKind: (yearNum === 2028 && it.official
+        ? "formal2028"
+        : yearNum === 2028
+          ? "unconfirmed"
+          : yearNum !== null
+            ? "reference"
+            : it.noticeKind) as JiangxiNoticeKind,
+      summaryZh: it.summaryZh ? trimPartialTailWord(it.summaryZh, 90) : it.summaryZh,
+      points: dedupeSentences(it.points),
+    };
+  });
+  fixed.sort((a, b) => {
+    if (a.isReference !== b.isReference) return a.isReference ? 1 : -1;
+    if (a.official !== b.official) return a.official ? -1 : 1;
+    const ta = a.publishedAt ? new Date(a.publishedAt).getTime() : 0;
+    const tb = b.publishedAt ? new Date(b.publishedAt).getTime() : 0;
+    return tb - ta;
+  });
+  return fixed;
+}
+
 function jiangxiFallback(it: FeedItem): JiangxiEnrichEntry {
   const hay = `${it.title} ${it.summary ?? ""}`;
-  const tag: JiangxiTag = /专业对照|对应专业|报考专业/.test(hay)
-    ? "专业对照"
-    : /考试科目|考试大纲|考试时间/.test(hay)
-      ? "考试科目"
+  const tag: JiangxiTag =
+    jiangxiTagFor(it.title, it.summary ?? "") ??
+    (/专业对照|对应专业|报考专业/.test(hay)
+      ? "专业对照"
       : /招生简章|招生章程|招生计划/.test(hay)
         ? "招生简章"
         : /报名|报考|志愿/.test(hay)
           ? "报名"
-          : "其他";
-  const yr = yearOf(it.title);
+          : "其他");
+  const yr =
+    yearOf(it.title) ??
+    (it.publishedAt ? `${new Date(it.publishedAt).getFullYear()}年` : null);
   return {
     tag,
-    summaryZh: it.summary ? it.summary.slice(0, 90) : null,
+    summaryZh: it.summary ? truncateAtBoundary(it.summary, 90) : null,
     points: it.summary ? [it.summary] : [],
-    relevance:
-      "面向江西省普通高校专升本考生，与你 2028 年参加专升本的方向相关；信息安全技术应用专业具体能报哪个本科专业，要以当年公布的专业对照表为准。",
+    relevance: jiangxiRelevanceFor({
+      title: it.title,
+      tag,
+      applicableYear: yr && /^\d{4}年$/.test(yr) ? yr : null,
+    }),
     actionNeeded: yr
       ? `这是 ${yr} 的材料，先当备考参考：看清考试科目和报考要求，2028 年的正式通知出来后再按新通知办。`
       : "先打开原文核对内容，2028 年的正式通知出来后再按新通知办。",
@@ -1684,10 +1937,10 @@ async function loadJiangxi(ctx: Ctx, force: boolean): Promise<{ items: JiangxiIt
       const result = await completeInference(ctx, 
         `你在为一位江西大二专科生（专业：信息安全技术应用，预计 2028 年毕业、2028 年参加普通高校专升本）整理「江西专升本」栏目。逐条判断：\n` +
           `- keep：是否确为江西省普通高校专升本的通知/政策/招生信息。成人高考、自考、培训机构广告、机构测评软文、面向高考生选大专的择校指南 keep=false。\n` +
-          `- tag：报名 / 考试科目 / 专业对照 / 招生简章 / 其他，按内容选最贴切的一个。\n` +
+          `- tag：报名 / 考试科目 / 专业对照 / 招生简章 / 录取 / 其他，按内容选最贴切的一个——分数线、录取控制线、投档线、录取结果归「录取」；报名流程、报名通知、报考归「报名」；考试时间、科目安排、准考证归「考试科目」。\n` +
           `- summaryZh：一句中文概括这条讲了什么，只能依据摘要已有信息；无摘要时留空字符串，绝不根据标题猜正文。\n` +
           `- pointsZh：2-3 条中文要点，全部来自摘要原文；无摘要留空数组。\n` +
-          `- relevance：一句中文说明与这位学生的关系。摘要或标题明确涉及信息安全/计算机类专业时说明直接关系；只是全省通用通知时，说明这是全体考生都要看的通用事项；不要编造专业对照结论。\n` +
+          `- relevance：一句中文说明与这位学生的关系，必须依据本条自己的标题/摘要写，每条各不相同，不要多条共用同一句模板。摘要或标题明确涉及信息安全/计算机类专业时说明直接关系；只是全省通用通知时，说明这是全体考生都要看的通用事项；不要编造专业对照结论。\n` +
           `- actionNeeded：一句中文说明他现在需要做什么。往年（2028 年之前）的材料，写明这是备考参考、现在只需了解科目与要求；不要编造报名日期或截止时间。\n\n${listing}`,
         { schema: jiangxiEnrichSchema, timeout_secs: 110 },
       );
@@ -1734,7 +1987,7 @@ async function loadJiangxi(ctx: Ctx, force: boolean): Promise<{ items: JiangxiIt
       url: it.url,
       source: it.source,
       publishedAt: it.publishedAt,
-      summaryZh: has ? entry.summaryZh ?? it.summary?.slice(0, 90) ?? null : null,
+      summaryZh: has ? entry.summaryZh ?? (it.summary ? truncateAtBoundary(it.summary, 90) : null) : null,
       points: has ? (entry.points.length > 0 ? entry.points : [it.summary as string]) : [],
       titleOnly: !has,
       readUrl: it.url,
@@ -1763,12 +2016,10 @@ async function loadJiangxi(ctx: Ctx, force: boolean): Promise<{ items: JiangxiIt
       })(),
     });
   }
-  items.sort((a, b) => {
-    if (a.isReference !== b.isReference) return a.isReference ? 1 : -1;
-    const ta = a.publishedAt ? new Date(a.publishedAt).getTime() : 0;
-    const tb = b.publishedAt ? new Date(b.publishedAt).getTime() : 0;
-    return tb - ta;
-  });
+  // Whole-list correction at ingest (content-derived tags, applicable
+  // years, per-item relevance, official sources first) — the same
+  // fixJiangxiList runs again on every getJiangxi read.
+  const fixedItems = fixJiangxiList(items);
 
   const bounded: Record<string, JiangxiEnrichEntry> = {};
   for (const [url, e] of Object.entries(store)) {
@@ -1776,8 +2027,8 @@ async function loadJiangxi(ctx: Ctx, force: boolean): Promise<{ items: JiangxiIt
     bounded[url] = e;
   }
   await writeCache(ctx, "jiangxi:enrich:v1", bounded);
-  const asOf = await writeCache(ctx, "jiangxi:all:v4", items);
-  return { items, asOf };
+  const asOf = await writeCache(ctx, "jiangxi:all:v4", fixedItems);
+  return { items: fixedItems, asOf };
 }
 
 // --- 海外机会与政策变化 -------------------------------------------------------
@@ -1796,6 +2047,15 @@ interface OverseasItem {
   whoApplies: string | null;
   /** 何时生效； null = source does not state it （未公布）. */
   effectiveWhen: string | null;
+  /**
+   * Effective-date nodes split per matter (user rule, 2026-11-22): when
+   * one policy takes effect on different dates for different groups
+   * (Singapore MOM: new applications vs renewals), each node is its own
+   * line — 「新申请：2027-01-01 起」/「续签：2028-01-01 起到期者」 —
+   * never crammed into one string. Derived from effectiveWhen in
+   * normalizeOverseas when not set explicitly.
+   */
+  effectiveParts?: string[] | null;
   eligibility: OverseasEligibility;
   isImmigration: boolean;
   /** For immigration items: the status it applies to (e.g. 学生签证持有者）. */
@@ -2121,6 +2381,7 @@ const SG_WORK_PASS_ITEM: OverseasItem = {
     "新加坡毕业后工作准证的薪资门槛上调：就业准证（EP）最低月薪自 2027 年 1 月 1 日起由 5,600 新元涨到 6,000 新元（金融服务业 6,200→6,600 新元），S 准证由 3,300 新元涨到 3,600 新元（金融服务业 3,800→4,000 新元），新门槛适用于新申请，续签自 2028 年 1 月 1 日起到期者适用。新加坡没有专门的毕业后工作签证，学生准证到期后必须由雇主申请 EP 或 S 准证才能留新工作；获批院校的毕业生可先申请长期探访准证（LTVP）在新求职。",
   whoApplies: "毕业后想留在新加坡工作的国际毕业生（须有雇主为其申请工作准证）；原文未单独写明专科毕业生是否适用，适用学历不明确",
   effectiveWhen: "2027-01-01 起的新申请按新门槛；续签自 2028-01-01 起到期者适用",
+  effectiveParts: ["新申请：2027-01-01 起", "续签：2028-01-01 起到期者"],
   eligibility: "unclear",
   isImmigration: false,
   identityLabel: null,
@@ -2882,6 +3143,31 @@ interface OverseasEnrichEntry {
  * not-applicable-to-the-user items and foreign-applicant-only stories
  * never reach the homepage list.
  */
+/**
+ * Study-column selection (user rule, 2026-11-22): the study column
+ * shows PROGRAMMES — ideally with the institution's own stated
+ * conditions. A generic study-abroad trend/news piece (kind=news from
+ * a non-official source, eligibility unstated, and not one condition
+ * field — no deadline, major match, language requirement, tuition or
+ * scholarship) is not a study opportunity and does not display as one.
+ * Applied at ingest and on every read.
+ */
+function isStudyTrendNoise(it: {
+  category?: OverseasCategory;
+  kind?: string;
+  official: boolean;
+  eligibility: OverseasEligibility;
+  deadline?: string | null;
+  majorMatch?: string | null;
+  languageReq?: string | null;
+  tuition?: string | null;
+  scholarship?: string | null;
+}): boolean {
+  if (it.category !== "study" || it.kind !== "news" || it.official) return false;
+  if (it.eligibility !== "unclear") return false;
+  return !it.deadline && !it.majorMatch && !it.languageReq && !it.tuition && !it.scholarship;
+}
+
 function overseasHomepageItems(items: OverseasItem[]): OverseasItem[] {
   return items.filter(
     (it) =>
@@ -3048,12 +3334,12 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
           `- country：从这八个国家里选一个最贴切的中文名；实在判断不了填「其他」。\n` +
           `- whatChanged：一句中文说明变了什么，只能依据摘要已有信息；无摘要留空字符串，绝不根据标题猜。\n` +
           `- whoApplies：一句中文说明适用于谁，依据摘要写；摘要没写清就如实写「来源未写明适用人群」。\n` +
-          `- effectiveWhen：何时生效，只有摘要明确写出时间时才填原文说法（如「2027年1月起」），没写填 null。\n` +
+          `- effectiveWhen：何时生效，只有摘要明确写出时间时才填原文说法（如「2027年1月起」），没写填 null。同一政策对不同人群有多个生效节点时（例如新申请与续签日期不同），逐个写清并用「；」分隔，每个节点都带对应人群与日期，不要挤成一句。\n` +
           `- eligibility：摘要明确说大专/专科可申请或接受大专学历，才填 diploma_eligible；明确只面向本科毕业生填 bachelor_only；没写清学历要求一律填 unclear——绝不能把不明确的标成能申请。\n` +
           `- isImmigration：是否属于移民/居留政策（不是学生签证本身的教学类消息）。是移民政策时 identityLabel 必填，写明适用身份（如「毕业生工签申请人」「学生签证持有者」）；不是则填 null。\n` +
           `- visa：这条是否属于学生签证或毕业后工作签证方面的变化——签证申请要求变了、费用变了、可停留期限变了、毕业后工作签证开放或收紧。属于填 true（这类条目会进入固定签证区长期展示）；奖学金、招生、学分认定等非签证消息填 false。\n` +
           `- pointsZh：2-3 条中文要点，全部来自摘要；无摘要留空数组。\n` +
-          `- category：这条的主栏目，只能选一个。升学、招生、学分衔接、奖学金、语言学校等求学路径填 study；实习、就业岗位、工作许可、学生签证与毕业后工签政策填 work_visa。\n` +
+          `- category：这条的主栏目，只能选一个。升学、招生、学分衔接、奖学金、语言学校等求学路径填 study；实习、就业岗位、工作许可、学生签证与毕业后工签政策填 work_visa。标题或要点讲实习（实习 / Internship Programme）的条目一律填 work_visa 且 stage 填 intern，绝不进 study。\n` +
           `- stage：study 时按适用阶段填 prepare（在读期间可准备）/ diploma（专科毕业可申请）/ bachelor（本科毕业才可申请，如硕士项目）；work_visa 时填 intern（在读实习）/ direct（专科毕业后从中国直接求职）/ overseas_job（海外留学期间及毕业后在当地就业）/ general（阶段不限的签证与移民政策）。\n` +
           `- kind：具体的招聘岗位填 job；政府发布的工作许可、签证或移民政策填 policy（政策不是岗位，绝不能标成 job）；其他填 news。\n` +
           `- majorMatch / languageReq / deadline / tuition / livingCost / scholarship：只填摘要明确写出的内容，金额保留原币种并注明按年还是整个项目（如「NZ$32,000/年」）；摘要没写的填 null，绝不估算或编造。deadline 只填摘要明确写出的申请截止说法。\n` +
@@ -3142,7 +3428,7 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
       // presenting untranslated text as a Chinese summary.
       whatChanged:
         entry?.whatChanged ??
-        (has && /[一-鿿]/.test(it.summary as string) ? (it.summary as string).slice(0, 90) : null),
+        (has && /[一-鿿]/.test(it.summary as string) ? truncateAtBoundary(it.summary as string, 90) : null),
       whoApplies: entry?.whoApplies ?? null,
       effectiveWhen: entry?.effectiveWhen ?? null,
       eligibility: entry?.eligibility ?? "unclear",
@@ -3200,7 +3486,9 @@ async function loadOverseas(ctx: Ctx, force: boolean): Promise<{ items: Overseas
   // the NDTV item stays as representative — before the generic
   // same-event dedupe below runs.
   const applicable = collapseNicProjectItems(
-    items.filter((it) => !isNotApplicableToUser(it) && !isForeignApplicantsOnlyItem(it)),
+    items.filter(
+      (it) => !isNotApplicableToUser(it) && !isForeignApplicantsOnlyItem(it) && !isStudyTrendNoise(it),
+    ),
   );
   // One event, one entry — also across the rotating list: same-event
   // retellings collapse to one, preferring the official source, then the
@@ -3305,7 +3593,7 @@ function isLocalFestivalTrafficNotice(it: { title: string; summary: string | nul
 
 async function loadMyWorld(ctx: Ctx, force: boolean): Promise<{ daily: WorldItem[]; weekly: WorldItem[]; all: WorldItem[]; asOf: string }> {
   if (!force) {
-    const cached = await readCache<{ daily: WorldItem[]; weekly: WorldItem[]; all: WorldItem[] }>(ctx, "world:all:v2", WORLD_TTL_MS);
+    const cached = await readCache<{ daily: WorldItem[]; weekly: WorldItem[]; all: WorldItem[] }>(ctx, "world:all:v3", WORLD_TTL_MS);
     if (cached) return { ...cached.data, asOf: cached.asOf };
   }
   const pool: WorldItem[] = [];
@@ -3416,11 +3704,11 @@ async function loadMyWorld(ctx: Ctx, force: boolean): Promise<{ daily: WorldItem
   const all = merged.sort(byTime).slice(0, 40);
   if (all.length === 0) {
     await noteRefreshFailure(ctx);
-    const stale = await readCacheStale<{ daily: WorldItem[]; weekly: WorldItem[]; all: WorldItem[] }>(ctx, "world:all:v2");
+    const stale = await readCacheStale<{ daily: WorldItem[]; weekly: WorldItem[]; all: WorldItem[] }>(ctx, "world:all:v3");
     if (stale) return { ...stale.data, asOf: stale.asOf };
     return { daily: [], weekly: [], all: [], asOf: new Date().toISOString() };
   }
-  const asOf = await writeCache(ctx, "world:all:v2", { daily, weekly, all });
+  const asOf = await writeCache(ctx, "world:all:v3", { daily, weekly, all });
   return { daily, weekly, all, asOf };
 }
 
@@ -3467,7 +3755,7 @@ const jiangxiItemSchema = z.object({
   titleOnly: z.boolean(),
   readUrl: z.string().nullable(),
   needsLogin: z.boolean(),
-  tag: z.enum(["报名", "考试科目", "专业对照", "招生简章", "其他"]),
+  tag: z.enum(["报名", "考试科目", "专业对照", "招生简章", "录取", "其他"]),
   applicableYear: z.string().nullable(),
   relevance: z.string(),
   actionNeeded: z.string(),
@@ -3518,6 +3806,7 @@ const overseasItemSchema = z.object({
   policyStatusLabel: z.string().nullable(),
   cardTagLabel: z.string().nullable(),
   decisionDateLabel: z.string().nullable(),
+  effectiveParts: z.array(z.string()).nullable(),
 });
 
 const worldItemSchema = feedItemSchema.extend({
@@ -3662,7 +3951,41 @@ export function correctOverseasItem(it: OverseasItem): OverseasItem {
   // reapply it on every read so a payload cached before a wording fix
   // can never serve the old tag/body again. No other card is touched.
   if (it.url === DS_RULING_ITEM.url || it.readUrl === DS_RULING_ITEM.url) return { ...it, ...DS_RULING_ITEM };
-  if (!isNicWinterInternship(it)) return it;
+  // Singapore MOM card (user rule, 2026-11-22): the two effective-date
+  // nodes (new applications from 2027-01-01; renewals expiring from
+  // 2028-01-01) are displayed as separate lines — reapply the split
+  // parts on every read so a cached payload cannot serve the old
+  // crammed one-line string.
+  if (it.url === SG_WORK_PASS_ITEM.url || it.readUrl === SG_WORK_PASS_ITEM.url) {
+    return { ...it, effectiveWhen: SG_WORK_PASS_ITEM.effectiveWhen, effectiveParts: SG_WORK_PASS_ITEM.effectiveParts ?? null };
+  }
+  if (!isNicWinterInternship(it)) {
+    // Internship recategorization (user rule, 2026-11-22, GENERAL — not
+    // tied to any one programme): an item whose title is about an
+    // internship （实习 / Internship), or whose body is about one while
+    // it sits in the study column, belongs in 「海外实习、工作与签证」
+    // as an in-study internship — never in 「海外升学」. The
+    // Moneycontrol Indian Army Internship Programme item is the named
+    // case; the rule is the shape, not the programme. Curated visa pins
+    // are exempt (none is an internship posting).
+    if (!CURATED_VISA_URLS.has(it.url)) {
+      const titleIsInternship = /实习|internship/i.test(it.title);
+      const bodyIsInternship = /实习|internship/i.test(
+        `${it.whatChanged ?? ""} ${(it.points ?? []).join(" ")}`,
+      );
+      if (titleIsInternship || (it.category === "study" && bodyIsInternship)) {
+        if (it.category !== "work_visa" || it.stage === "prepare" || it.stage === "diploma" || it.stage === "bachelor") {
+          return {
+            ...it,
+            category: "work_visa",
+            stage: "intern",
+            kind: it.kind === "policy" && !/签证|visa/i.test(it.title) ? "job" : it.kind,
+          };
+        }
+      }
+    }
+    return it;
+  }
   return {
     ...it,
     country: "印度",
@@ -3701,8 +4024,17 @@ function overseasRelevance(it: OverseasItem): string {
     return `这是${it.country}的政策动态，不是岗位；它影响的是：${it.identityLabel ?? it.whoApplies ?? "见原文"}，会影响你之后去${it.country}读书或工作的安排。`;
   if (it.eligibility === "diploma_eligible")
     return "来源明确接受专科背景，与你直接相关，可点开看条件和截止日期。";
-  if (kind === "job")
-    return `岗位在${it.location ?? it.country}，与信息安全、网络运维或 IT 支持方向相关；签证支持${it.visaSupport === "yes" ? "雇主已明确提供" : it.visaSupport === "no" ? "雇主明确不提供" : "未说明"}，点开看完整要求。`;
+  if (kind === "job") {
+    // The relevance line must be grounded in THIS item's own text
+    // (user rule, 2026-11-22): claim an infosec/network/IT-support fit
+    // only when the item itself says so.
+    const infosecFit = /信息安全|网络安全|网络运维|网络工程师|IT\s*支持|网络|security|infosec/i.test(
+      `${it.title} ${it.whatChanged ?? ""} ${it.eduReq ?? ""}`,
+    );
+    return infosecFit
+      ? `岗位在${it.location ?? it.country}，与信息安全、网络运维或 IT 支持方向相关；签证支持${it.visaSupport === "yes" ? "雇主已明确提供" : it.visaSupport === "no" ? "雇主明确不提供" : "未说明"}，点开看完整要求。`
+      : `岗位在${it.location ?? it.country}；签证支持${it.visaSupport === "yes" ? "雇主已明确提供" : it.visaSupport === "no" ? "雇主明确不提供" : "未说明"}，点开看地点、学历和经验要求。`;
+  }
   return it.whoApplies
     ? `适用于：${it.whoApplies}。适用学历${it.eligibility === "bachelor_only" ? "仅限本科毕业生" : "未写清"}，点开核对再决定。`
     : "来源未写清适用人群，点开看原文再判断和你的关系。";
@@ -3720,18 +4052,37 @@ function normalizeOverseas(raw: OverseasItem): z.infer<typeof overseasItemSchema
       ? policyStatusOnDate(it.effectiveDate, it.effectiveTimeZone, new Date())
       : null;
   return {
-    title: it.title,
+    title: decodeEntities(it.title),
     url: it.url,
     source: it.source,
     publishedAt: it.publishedAt,
     country: it.country,
-    whatChanged: it.whatChanged,
+    whatChanged: it.whatChanged ? trimPartialTailWord(it.whatChanged, 90) : it.whatChanged,
     whoApplies: it.whoApplies,
     effectiveWhen: it.effectiveWhen,
+    // Per-matter effective-date lines (user rule, 2026-11-22): explicit
+    // parts win (curated cards); otherwise an effectiveWhen carrying
+    // several 「；」-separated nodes is split into one line per node.
+    effectiveParts:
+      it.effectiveParts && it.effectiveParts.length > 0
+        ? it.effectiveParts
+        : (() => {
+            // Split only when EVERY segment carries its own full date —
+            // otherwise the ； is mid-sentence punctuation (the NZ SGWV
+            // note's parenthetical) and the string stays whole.
+            if (!it.effectiveWhen || !/[；;]/.test(it.effectiveWhen)) return null;
+            const parts = it.effectiveWhen
+              .split(/[；;]/)
+              .map((p) => p.trim())
+              .filter(Boolean);
+            return parts.length >= 2 && parts.every((p) => /\d{4}\s*年|\d{4}-\d{2}-\d{2}/.test(p))
+              ? parts
+              : null;
+          })(),
     eligibility: it.eligibility,
     isImmigration: it.isImmigration,
     identityLabel: it.identityLabel,
-    points: it.points,
+    points: dedupeSentences(it.points),
     titleOnly: it.titleOnly,
     readUrl: it.readUrl,
     needsLogin: it.needsLogin,
@@ -3764,30 +4115,60 @@ function normalizeOverseas(raw: OverseasItem): z.infer<typeof overseasItemSchema
   };
 }
 
-const WORLD_TOPIC_RELEVANCE: Record<string, string> = {
-  "国内经济": "国内经济走向会影响你毕业时的就业环境和专升本后的升学选择。",
-  "国外经济": "海外经济变化会影响留学费用和毕业后的海外就业机会。",
-  "经济": "经济走向会影响你毕业时的就业环境与留学成本。",
-  "政治": "国际政治变化可能影响签证、留学与出行安排，先了解背景。",
-  "科技": "科技动态与你的信息安全专业学习方向相关。",
-  "网络安全": "与你的信息安全技术应用专业直接相关，也是你以后求职的核心领域。",
-  "出行安全": "关系到你以后出国读书、实习和旅行时的人身安全。",
-  "留学安全": "关系到中国留学生在海外的安全与权益，与你可能的出国计划直接相关。",
-  "地区冲突": "地区局势会影响留学目的地选择和出行安全，先了解背景。",
-  "书籍": "本周阅读精选，适合利用课余时间拓展视野。",
-  "历史": "本周阅读精选，适合利用课余时间拓展视野。",
-  "语言学习": "语言能力是出国和求职的门槛，读物精选放在每周；具体课程和考试报名在学习栏。",
-};
+/**
+ * 「和我有什么关系」 for the world column (user rule, 2026-11-22): the
+ * line must be grounded in THIS item's own title/summary — never a
+ * per-topic template that contradicts the item. The named failure: an
+ * Indonesia candy-factory FIRE （新华网） carried the politics template
+ * 「国际政治变化可能影响签证、留学与出行安排」 — a fire is not a visa
+ * story. Order matters: concrete content signals first (a disaster /
+ * accident is a safety event, full stop), the visa/study/travel claim
+ * only when the item's own text actually involves visas, study abroad
+ * or travel, and an honest neutral line when nothing in the item
+ * supports a stronger claim.
+ */
+function worldRelevanceFor(it: WorldItem): string {
+  const text = `${it.title} ${it.summary ?? ""}`;
+  if (/火灾|爆炸|地震|洪水|台风|海啸|事故|伤亡|遇难|尸袋|坠毁|坠机|枪击|踩踏/.test(text))
+    return "这是一起海外安全事故报道，先看事发经过与当地的安全状况；它和签证、留学申请没有直接关系。";
+  if (/网络安全|黑客|漏洞|数据泄露|勒索软件|网络攻击|信息安全/.test(text))
+    return "与你的信息安全技术应用专业直接相关，也是你以后求职的核心领域。";
+  if (/留学生|中国学生|留学安全/.test(text) && /安全|遇害|袭击|失踪|诈骗|歧视/.test(text))
+    return "关系到中国留学生在海外的安全与权益，与你可能的出国计划直接相关。";
+  if (/签证|移民|出入境|居留|领事/.test(text))
+    return "这条涉及签证或出入境安排，可能影响你之后留学与出行，先了解背景。";
+  if (/出行安全|旅行安全|旅游安全|航班|铁路|交通安全/.test(text))
+    return "关系到你以后出国读书、实习和旅行时的人身安全。";
+  if (/冲突|战争|停火|导弹|空袭|制裁|军事/.test(text))
+    return "地区局势会影响留学目的地选择和出行安全，先了解背景。";
+  if (/经济|股市|汇率|通胀|贸易|央行|利率|GDP|物价|就业数据/i.test(text))
+    return "经济走向会影响你毕业时的就业环境与留学成本。";
+  if (/科技|人工智能|芯片|机器人|航天|新能源|互联网/.test(text))
+    return "科技动态与你的信息安全专业学习方向相关。";
+  if (it.topic === "书籍" || it.topic === "历史")
+    return "本周阅读精选，适合利用课余时间拓展视野。";
+  if (it.topic === "语言学习")
+    return "语言能力是出国和求职的门槛，读物精选放在每周；具体课程和考试报名在学习栏。";
+  return "按重要性筛出的国内外要闻，了解背景即可；这条和你的升学、出行没有直接关系。";
+}
 
 function normalizeWorld(it: WorldItem): z.infer<typeof worldItemSchema> {
-  return { ...it, relevance: WORLD_TOPIC_RELEVANCE[it.topic] ?? "按重要性筛出的国内外要闻，了解背景即可。" };
+  return { ...it, title: decodeEntities(it.title), relevance: worldRelevanceFor(it) };
 }
 
 function normalizeLearning(it: LearningItem): z.infer<typeof learningItemSchema> {
   const fixed = correctLearningItem(it);
+  // Text hygiene on every read (user rule, 2026-11-22): decoded title,
+  // no duplicated sentence inside the points, and a summary that an
+  // older mid-word slice cut (e.g. "international studen") loses its
+  // partial tail word instead of displaying it.
+  const summaryZh = fixed.summaryZh ? trimPartialTailWord(fixed.summaryZh, 90) : fixed.summaryZh;
   return {
     ...fixed,
-    relevance: fixed.summaryZh ?? "点开看适合谁、能学到什么；学段、费用和截止日期都以官方入口为准。",
+    title: decodeEntities(fixed.title),
+    summaryZh,
+    points: dedupeSentences(fixed.points),
+    relevance: summaryZh ?? "点开看适合谁、能学到什么；学段、费用和截止日期都以官方入口为准。",
   };
 }
 
@@ -3890,7 +4271,10 @@ export const Actions = {
     }),
     response: z.object({ asOf: z.string(), items: z.array(feedItemSchema) }),
     async handler(ctx, args) {
-      return await loadCategory(ctx, args.category, args.force);
+      const r = await loadCategory(ctx, args.category, args.force);
+      // Titles are entity-decoded on every read too, so a payload cached
+      // before the numeric-entity fix cannot show raw &#163; / &#183;.
+      return { asOf: r.asOf, items: r.items.map((it) => ({ ...it, title: decodeEntities(it.title) })) };
     },
   }),
 
@@ -4094,7 +4478,7 @@ export const Actions = {
         if (r.key.startsWith("feed:") && (!maxFeed || r.fetchedAt.getTime() > maxFeed.getTime())) maxFeed = r.fetchedAt;
       }
       return {
-        items: items.slice(0, 60),
+        items: items.slice(0, 60).map((it) => ({ ...it, title: decodeEntities(it.title) })),
         feedErrors,
         followedCount: subs.length,
         asOf: maxFeed ? maxFeed.toISOString() : new Date().toISOString(),
@@ -4258,7 +4642,7 @@ export const Actions = {
         blockedReason: string | null;
       };
       const cached = await readCacheStale<Detail>(ctx, key);
-      if (cached) return cached.data;
+      if (cached) return { ...cached.data, points: dedupeSentences(cached.data.points) };
 
       // Resolve the direct publisher URL in parallel with summarizing:
       // Google News relay → batchexecute decode (shared cache), MSN repost
@@ -4294,6 +4678,7 @@ export const Actions = {
       const readUrl = await resolvePromise;
       const result: Detail = {
         ...base,
+        points: dedupeSentences(base.points),
         readUrl,
         needsLogin: loginRequired(args.source, readUrl ?? args.url),
         // Confirmed China-blocked host (registry): the UI labels the item
@@ -4307,7 +4692,7 @@ export const Actions = {
 
   getJiangxi: defineAction({
     description:
-      "Returns the 江西专升本 column for a Jiangxi 专科 student （信息安全技术应用， 2028 年毕业）: official-first notices about 报名/考试科目/专业对照/招生简章， each with applicable year, relevance to the major and what to do. Training-institution marketing （机构评测/测评等） and 高考择校 content for gaokao students choosing a 专科 school are hidden at ingest — he is already a second-year student. Ended exam-administration reminders （考区/考点/考场提醒、准考证提示 whose sitting has passed, e.g. the 2026 九江考区温馨提醒） are moved to history — filtered at ingest AND on every read so cached payloads obey too — while lasting-value material （考试科目/专业对照/招生方案/实施方案/报名流程/分数线） stays visible. Past-year items are flagged isReference （备考参考）; the pending list marks each 2028 matter as 待公布 until a 2028 notice covers it.",
+      "Returns the 江西专升本 column for a Jiangxi 专科 student （信息安全技术应用， 2028 年毕业）: official-first notices about 报名/考试科目/专业对照/招生简章， each with applicable year, relevance to the major and what to do. Training-institution marketing （机构评测/测评等） and 高考择校 content for gaokao students choosing a 专科 school are hidden at ingest — he is already a second-year student. Ended exam-administration reminders （考区/考点/考场提醒、准考证提示 whose sitting has passed, e.g. the 2026 九江考区温馨提醒） are moved to history — filtered at ingest AND on every read so cached payloads obey too — while lasting-value material （考试科目/专业对照/招生方案/实施方案/报名流程/分数线） stays visible. Past-year items are flagged isReference （备考参考）; the pending list marks each 2028 matter as 待公布 until a 2028 notice covers it. Tags are content-derived deterministically at ingest and on every read (2026-11-22): 分数线/录取控制线/投档线/录取结果 → 录取， 报名流程/报名通知/报考 → 报名， 考试时间/科目安排/准考证 → 考试科目 — a score-line announcement can never stay tagged 报名. A missing applicable year is derived from the title, then the summary, then the publish date, so dated past-year material always shows its year. Relevance lines are per-item, grounded in the item's own tag/title/year; the old shared template (or any relevance repeated verbatim across items) is replaced on every read. Official sources (jxeea.cn / .gov.cn / .edu.cn) sort first inside each group.",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -4322,7 +4707,9 @@ export const Actions = {
       // cached before the rule existed is filtered on every response too:
       // ended 考区/考点/准考证 reminders leave the visible list, while
       // 考试科目/专业对照/招生方案 material stays （备考参考）.
-      const items = loaded.items.filter((it) => !isJiangxiEndedExamReminder(it.title, it.publishedAt));
+      const items = fixJiangxiList(
+        loaded.items.filter((it) => !isJiangxiEndedExamReminder(it.title, it.publishedAt)),
+      );
       const current = items.filter((it) => !it.isReference);
       const covers = (tag: JiangxiTag) => current.some((it) => it.tag === tag);
       const pending = [
@@ -4337,7 +4724,7 @@ export const Actions = {
 
   getOverseas: defineAction({
     description:
-      "Returns decision-changing overseas opportunities and policy changes for a Chinese 专科 (diploma) student across the US, New Zealand, Singapore, Vietnam, Japan, South Korea, Ireland and the UK: what changed, who it applies to and when it takes effect, with the original university/government link. Applicability is checked BEFORE pinning (2026-11-22): an item that clearly does not apply to the user — bachelor_only, or its own text says 不适用于我 / 不含信息安全技术应用 — is excluded from the column entirely, fixed visa zone included (so the zone holds the Yale D/S ruling, Singapore MOM thresholds, the Japan language-school rule and — since 2026-11-22, as a hand-verified curated pin exempt from the rotating list's nationality filter — the NZ Short-term Graduate Work Visa labelled as a future path (usable only after completing an NZQCF Level 5–7 qualification in NZ; the user's Jiangxi diploma does not itself qualify, and it is a different visa from the bachelor-only NZ PSWV expansion); the bachelor-only NZ PSWV/UK items and the Korea pilot are out). Homepage selection also requires the item to involve Chinese applicants or state a rule for applicants of all countries (2026-11-22): stories only about one foreign nationality's applicants (Indian NZ approval-rate data at 64.1%, Indian PhD post-study rights, visas 'for Indians', Ireland refusals of Indian applicants, a jobs guide for Nigerians) are excluded from the homepage list at ingest, after enrichment, in the pinned-zone merge and on every read of a cached payload — homepage display only, the category archive keeps its data. A bare comparison mention ('India lags behind China') does not count as involving Chinese applicants. In Chinese headlines of the shape 'X国留学生 / X国申请人', X is the applicants' nationality, not the destination (2026-11-22): 《越南留学生如何在加拿大申请留学》 is about Vietnamese applicants applying to Canada and leaves the homepage, while pieces treating Vietnam as the destination （去越南留学 / 越南学生签证规则） and all-applicant content (a Stanford graduate-union petition, a Bowdoin international-student admissions page) stay. One event, one entry: exact duplicates (same title/source/day) and same-event retellings are merged, keeping the official/newest version; the NZ student-visa statistics release is one named event, so its retellings collapse to a single entry before the applicant rule is applied. Student-visa and post-study-work-visa changes carry visa=true and live in a fixed zone (pinned=true): they persist across daily refreshes and are only removed when superseded by a newer item on the same topic, expired, or ruled not applicable. Unclear eligibility stays 'unclear' and is never presented as diploma-eligible. Immigration items carry an identityLabel. Policy cards (kind=policy) state only whom the policy affects (2026-11-22): their relevance text never uses application wording, no application deadline is exposed for them, and the client hides the eligibility badge and deadline fields — only genuinely open programmes/jobs show those. The NZ Short-term Graduate Work Visa's status label is computed at read time from its effective date 2026-11-23 against the current date in Pacific/Auckland (before that date it reads 即将生效， on/after it 已生效）; its 「11月23日起」 wording and 未来路径 note are unchanged. The NIC Winter Internship 2026 is ONE project however many outlets retell it (user-verified 2026-11-22 against the NDTV original, whose article opens with the NIC announcement): NDTV's 'Ministry Of Electronics And IT Offers Two-Month Internship With Rs 20,000 Stipend', India.com's 'NIC Winter Internship 2026' and any Moneycontrol / JagranJosh retelling are the same programme, so the project is merged at ingest and on every read to a single entry with the NDTV item as representative, carrying the verified facts (NIC under MeitY; two months, 2026-12-01 to 2027-01-31; 50 seats; Rs 10,000/month, Rs 20,000 total; official entry dii.nic.in, registration open since Nov 2, closing date officially unconfirmed so no deadline is ever shown). It is deterministically filed under 海外实习、工作与签证 (category work_visa, stage intern, kind job), never 海外升学： verified offline at NIC Headquarters, New Delhi, not remote from China; whether students in China may apply is unstated in the source (it states only Indian local degree/enrolment requirements, no nationality rule either way), so eligibility stays 'unclear' / acceptsOverseas unstated — neither applicable nor not applicable — and it is excluded from the 近期可申请 digest. The Yale OISS D/S card carries the user-dictated verbatim combined tag 「美国签证政策｜D/S 继续适用」 (cardTagLabel, replacing the generic 签证/移民政策 stage chip and the separate status suffix; the 「政策 · 非岗位」 chip stays), the user's verbatim body text taken from the Yale page's 2026-11-17 update (the fixed-period rule was stopped before taking effect and set aside on 2026-11-16; it never took effect; F-1/J-1 students, scholars and eligible dependants generally remain admitted for D/S — never worded as 恢复）, and a standalone 「法院裁决日期：2026 年 11 月 16 日」 line (decisionDateLabel); publishedAt is the source update date 2026-11-17 and the points keep the 2026-11-22 check date. correctOverseasItem reapplies the curated entry on every read so a cached payload cannot serve the older wording; the NZ/Singapore/Japan policy cards are unchanged.",
+      "Returns decision-changing overseas opportunities and policy changes for a Chinese 专科 (diploma) student across the US, New Zealand, Singapore, Vietnam, Japan, South Korea, Ireland and the UK: what changed, who it applies to and when it takes effect, with the original university/government link. Applicability is checked BEFORE pinning (2026-11-22): an item that clearly does not apply to the user — bachelor_only, or its own text says 不适用于我 / 不含信息安全技术应用 — is excluded from the column entirely, fixed visa zone included (so the zone holds the Yale D/S ruling, Singapore MOM thresholds, the Japan language-school rule and — since 2026-11-22, as a hand-verified curated pin exempt from the rotating list's nationality filter — the NZ Short-term Graduate Work Visa labelled as a future path (usable only after completing an NZQCF Level 5–7 qualification in NZ; the user's Jiangxi diploma does not itself qualify, and it is a different visa from the bachelor-only NZ PSWV expansion); the bachelor-only NZ PSWV/UK items and the Korea pilot are out). Homepage selection also requires the item to involve Chinese applicants or state a rule for applicants of all countries (2026-11-22): stories only about one foreign nationality's applicants (Indian NZ approval-rate data at 64.1%, Indian PhD post-study rights, visas 'for Indians', Ireland refusals of Indian applicants, a jobs guide for Nigerians) are excluded from the homepage list at ingest, after enrichment, in the pinned-zone merge and on every read of a cached payload — homepage display only, the category archive keeps its data. A bare comparison mention ('India lags behind China') does not count as involving Chinese applicants. In Chinese headlines of the shape 'X国留学生 / X国申请人', X is the applicants' nationality, not the destination (2026-11-22): 《越南留学生如何在加拿大申请留学》 is about Vietnamese applicants applying to Canada and leaves the homepage, while pieces treating Vietnam as the destination （去越南留学 / 越南学生签证规则） and all-applicant content (a Stanford graduate-union petition, a Bowdoin international-student admissions page) stay. One event, one entry: exact duplicates (same title/source/day) and same-event retellings are merged, keeping the official/newest version; the NZ student-visa statistics release is one named event, so its retellings collapse to a single entry before the applicant rule is applied. Student-visa and post-study-work-visa changes carry visa=true and live in a fixed zone (pinned=true): they persist across daily refreshes and are only removed when superseded by a newer item on the same topic, expired, or ruled not applicable. Unclear eligibility stays 'unclear' and is never presented as diploma-eligible. Immigration items carry an identityLabel. Policy cards (kind=policy) state only whom the policy affects (2026-11-22): their relevance text never uses application wording, no application deadline is exposed for them, and the client hides the eligibility badge and deadline fields — only genuinely open programmes/jobs show those. The NZ Short-term Graduate Work Visa's status label is computed at read time from its effective date 2026-11-23 against the current date in Pacific/Auckland (before that date it reads 即将生效， on/after it 已生效）; its 「11月23日起」 wording and 未来路径 note are unchanged. The NIC Winter Internship 2026 is ONE project however many outlets retell it (user-verified 2026-11-22 against the NDTV original, whose article opens with the NIC announcement): NDTV's 'Ministry Of Electronics And IT Offers Two-Month Internship With Rs 20,000 Stipend', India.com's 'NIC Winter Internship 2026' and any Moneycontrol / JagranJosh retelling are the same programme, so the project is merged at ingest and on every read to a single entry with the NDTV item as representative, carrying the verified facts (NIC under MeitY; two months, 2026-12-01 to 2027-01-31; 50 seats; Rs 10,000/month, Rs 20,000 total; official entry dii.nic.in, registration open since Nov 2, closing date officially unconfirmed so no deadline is ever shown). It is deterministically filed under 海外实习、工作与签证 (category work_visa, stage intern, kind job), never 海外升学： verified offline at NIC Headquarters, New Delhi, not remote from China; whether students in China may apply is unstated in the source (it states only Indian local degree/enrolment requirements, no nationality rule either way), so eligibility stays 'unclear' / acceptsOverseas unstated — neither applicable nor not applicable — and it is excluded from the 近期可申请 digest. The Yale OISS D/S card carries the user-dictated verbatim combined tag 「美国签证政策｜D/S 继续适用」 (cardTagLabel, replacing the generic 签证/移民政策 stage chip and the separate status suffix; the 「政策 · 非岗位」 chip stays), the user's verbatim body text taken from the Yale page's 2026-11-17 update (the fixed-period rule was stopped before taking effect and set aside on 2026-11-16; it never took effect; F-1/J-1 students, scholars and eligible dependants generally remain admitted for D/S — never worded as 恢复）, and a standalone 「法院裁决日期：2026 年 11 月 16 日」 line (decisionDateLabel); publishedAt is the source update date 2026-11-17 and the points keep the 2026-11-22 check date. correctOverseasItem reapplies the curated entry on every read so a cached payload cannot serve the older wording; the NZ/Singapore/Japan policy cards are unchanged. Internship recategorization is a general deterministic rule (2026-11-22): any item whose title is about an internship （实习 / Internship), or whose body is about one while filed under study, is moved to 海外实习、工作与签证 as stage=intern at ingest and on every read — the Moneycontrol Indian Army Internship Programme is the named case, not a special case. The study column prioritizes programmes with an institution's own stated conditions (official source + deadline/major-match/language-requirement first) and hides generic study-abroad trend news (kind=news, non-official, eligibility unclear, no condition fields at all). Policy effective dates are carried per matter in effectiveParts: the Singapore MOM card shows 「新申请：2027-01-01 起」 and 「续签：2028-01-01 起到期者」 as separate lines (reapplied on every read), and any multi-node effectiveWhen is split the same way. A job whose eligibility is unclear and which states no education/experience requirement never enters the 近期可申请 digest. Job relevance lines claim an infosec/network/IT-support fit only when the item's own text supports it.",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -4350,14 +4737,38 @@ export const Actions = {
       // cached before the merge rule existed collapses the NIC Winter
       // Internship project's retellings to the single NDTV
       // representative on every read.
-      const normalized = collapseNicProjectItems(items.map(normalizeOverseas));
-      return { items: normalized, asOf, hasTodayUpdate: items.some((it) => isTodayShanghai(it.publishedAt)) };
+      const normalized = collapseNicProjectItems(items.map(normalizeOverseas)).filter(
+        (it) => !isStudyTrendNoise(it),
+      );
+      // Display order (user rule, 2026-11-22): the fixed visa zone keeps
+      // its order first; inside 海外升学， programmes carrying an
+      // institution's own stated conditions (official source + a stated
+      // deadline / major match / language requirement) come first —
+      // official sources before the rest, then items with deadlines.
+      // The two category sections filter this list, so regrouping here
+      // cannot move an item across categories.
+      const studyRank = (it: (typeof normalized)[number]): number =>
+        it.official && (it.deadline || it.majorMatch || it.languageReq)
+          ? 0
+          : it.official
+            ? 1
+            : it.deadline || it.majorMatch || it.languageReq
+              ? 2
+              : 3;
+      const ordered = [
+        ...normalized.filter((it) => it.pinned),
+        ...normalized
+          .filter((it) => !it.pinned && it.category === "study")
+          .sort((a, b) => studyRank(a) - studyRank(b)),
+        ...normalized.filter((it) => !it.pinned && it.category !== "study"),
+      ];
+      return { items: ordered, asOf, hasTodayUpdate: items.some((it) => isTodayShanghai(it.publishedAt)) };
     },
   }),
 
   getMyWorld: defineAction({
     description:
-      "Returns 我关注的世界： daily picks (at most 5, same event merged, across 国内经济/国外经济/政治/科技/网络安全/出行安全/地区冲突）, weekly picks （书籍/历史/语言学习）, and the full topic-browsable list. Local festival/traffic advisories written for one unrelated locality's residents (e.g. 大理州庆交通安全出行提示） are excluded at ingest and on every read; nationwide notices and travel-safety items about 江西 or a study destination （美国/新西兰/新加坡/越南/日本/韩国/爱尔兰/英国） stay.",
+      "Returns 我关注的世界： daily picks (at most 5, same event merged, across 国内经济/国外经济/政治/科技/网络安全/出行安全/地区冲突）, weekly picks （书籍/历史/语言学习）, and the full topic-browsable list. Local festival/traffic advisories written for one unrelated locality's residents (e.g. 大理州庆交通安全出行提示） are excluded at ingest and on every read; nationwide notices and travel-safety items about 江西 or a study destination （美国/新西兰/新加坡/越南/日本/韩国/爱尔兰/英国） stay. Each item's 「和我有什么关系」 line is derived deterministically from the item's OWN title/summary (2026-11-22), never from a per-topic template: a disaster/accident report (e.g. the Indonesia candy-factory fire) is labelled a safety event with no visa claim, and the visa/study/travel wording is used only when the item's own text involves visas, study abroad or travel. Titles are HTML-entity-decoded (&#163; → £, &#183; → ·) at ingest and on every read, and a Google News multi-outlet headline list is never stored as a summary — the item is title-only instead of splicing several outlets' reports into one.",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -4438,6 +4849,11 @@ export const Actions = {
         // stated application deadline, or a source-confirmed diploma-eligible
         // opening. Plain news about overseas study never counts as 可申请.
         if (it.kind !== "job" && !it.deadline && it.eligibility !== "diploma_eligible") continue;
+        // A job whose application eligibility is unclear AND which states
+        // no education/experience requirement at all is not shown as
+        // currently applicable (user rule, 2026-11-22): there is no
+        // grounded basis to say he can apply.
+        if (it.kind === "job" && it.eligibility === "unclear" && !it.eduReq && !it.expReq) continue;
         if (it.eligibility === "bachelor_only") continue;
         if (!it.readUrl && !it.url) continue;
         if (it.blockedReason) continue;

@@ -757,6 +757,11 @@ function OverseasRow({ item }: { item: OverseasItem }) {
   // the header line above). The collapsed rendering and the underlying
   // data fields are unchanged.
   const dedupeExpanded = open && item.decisionDateLabel != null;
+  // Policy effective dates are shown per matter (user rule, 2026-11-22):
+  // a policy with several effective nodes (Singapore MOM: new
+  // applications vs renewals) lists each node on its own line instead
+  // of one crammed string. Job cards never show policy fields at all.
+  const effParts = item.kind === "policy" ? (item.effectiveParts ?? []) : [];
   return (
     <li className="border-b border-[var(--border)] py-3">
       <button
@@ -808,10 +813,20 @@ function OverseasRow({ item }: { item: OverseasItem }) {
           <span className="text-[var(--accent)]">· {open ? "收起 ▴" : item.kind === "policy" ? "展开详情 ▾" : "展开看条件 ▾"}</span>
         </p>
         <p className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-[var(--dim)]">
-          {dedupeExpanded ? null : <span>政策生效：{item.effectiveWhen ?? "未公布"}</span>}
+          {item.kind === "policy" && effParts.length === 0 && !dedupeExpanded ? (
+            <span>政策生效：{item.effectiveWhen ?? "未公布"}</span>
+          ) : null}
           {item.decisionDateLabel ? <span className="font-medium text-[var(--text)]">{item.decisionDateLabel}</span> : null}
           {item.kind === "policy" ? null : <span>申请截止：{item.deadline ?? "未说明"}</span>}
         </p>
+        {effParts.length > 0 ? (
+          <div className="mt-1 space-y-0.5 text-xs text-[var(--dim)]">
+            <p className="font-medium text-[var(--text)]">生效安排（按事项分开）：</p>
+            {effParts.map((p) => (
+              <p key={p}>· {p}</p>
+            ))}
+          </div>
+        ) : null}
         <dl className="mt-1.5 space-y-0.5 text-sm leading-relaxed text-[var(--dim)]">
           <div>
             <dt className="inline font-medium text-[var(--text)]">变了什么：</dt>
@@ -826,7 +841,7 @@ function OverseasRow({ item }: { item: OverseasItem }) {
             <dt className="inline font-medium text-[var(--text)]">适用于谁：</dt>
             <dd className="inline">{item.whoApplies ?? "来源未写明适用人群"}</dd>
           </div>
-          {dedupeExpanded ? null : (
+          {dedupeExpanded || item.kind === "job" || effParts.length > 0 ? null : (
             <div>
               <dt className="inline font-medium text-[var(--text)]">何时生效：</dt>
               <dd className="inline">{item.effectiveWhen ?? "未公布"}</dd>
@@ -873,6 +888,16 @@ function OverseasRow({ item }: { item: OverseasItem }) {
             ) : item.kind === "policy" ? (
               <>
                 <div><dt className="inline font-medium text-[var(--text)]">适用身份：</dt><dd className="inline">{item.identityLabel ?? item.whoApplies ?? "见原文"}</dd></div>
+                {effParts.length > 0 ? (
+                  <div>
+                    <dt className="font-medium text-[var(--text)]">生效安排：</dt>
+                    <dd>
+                      {effParts.map((p) => (
+                        <span key={p} className="block">{p}</span>
+                      ))}
+                    </dd>
+                  </div>
+                ) : null}
                 <div><dt className="inline font-medium text-[var(--text)]">状态：</dt><dd className="inline">{item.policyStatusLabel ?? (item.policyStatus === "enacted" ? "已生效" : item.policyStatus === "upcoming" ? "即将生效（尚未到生效日）" : item.policyStatus === "proposal" ? "提案/计划，尚未生效" : "未说明是提案还是已生效")}</dd></div>
                 <div><dt className="inline font-medium text-[var(--text)]">说明：</dt><dd className="inline">这是政府政策，不是招聘岗位，不能按「岗位可申请」理解。</dd></div>
               </>
@@ -1124,6 +1149,7 @@ function HotSection() {
 
 function WorldSection() {
   const [topic, setTopic] = useState<string>("今日精选");
+  const [weeklyAll, setWeeklyAll] = useState(false);
   const queryClient = useQueryClient();
   const q = useQuery({ queryKey: ["world"], queryFn: () => api.getMyWorld({ force: false }) });
   const refresh = useMutation({
@@ -1188,10 +1214,21 @@ function WorldSection() {
         <div className="mt-6">
           <h4 className="font-headline text-base font-bold text-[var(--text)]">每周精选 · 书籍 / 历史 / 语言学习</h4>
           <ul>
-            {weekly.map((item, i) => (
+            {(weeklyAll ? weekly : weekly.slice(0, 3)).map((item, i) => (
               <ArticleRow key={`${item.url}-${i}`} item={item} relevance={item.relevance} />
             ))}
           </ul>
+          {weekly.length > 3 ? (
+            <button
+              type="button"
+              onClick={() => setWeeklyAll((v) => !v)}
+              aria-expanded={weeklyAll}
+              aria-label={weeklyAll ? "收起每周精选" : `展开其余 ${weekly.length - 3} 条每周精选`}
+              className="mt-2 text-sm font-medium text-[var(--accent)]"
+            >
+              {weeklyAll ? "收起 ▴" : `展开其余 ${weekly.length - 3} 条 ▾`}
+            </button>
+          ) : null}
         </div>
       ) : null}
     </section>
