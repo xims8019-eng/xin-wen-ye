@@ -9,7 +9,7 @@ import { EnrichDeterministicError, isDeterministicEnrichError } from "./llm.js";
 // Local replacement for the SDK's `defineAction` (previously provided by
 // the Muse-hosted SDK). It returns the definition object as-is, keeping the
 // description/request/response/handler structure and type inference, so the
-// 18 action definitions below did not need to change.
+// 19 action definitions below did not need to change.
 // ---------------------------------------------------------------------------
 
 function defineAction<Req extends z.ZodTypeAny, Res extends z.ZodTypeAny>(def: {
@@ -1172,6 +1172,8 @@ interface LearningItem {
   startHint?: string | null;
   /** Display group assigned at read time in getLearning; absent on stored pool items. */
   group?: "anytime" | "upcoming" | null;
+  /** Hand-verified AI-learning curated courses only: member of the 「AI 学习」 topic filter. */
+  aiTopic?: boolean;
 }
 
 const LEARNING_TTL_MS = 45 * 60 * 1000;
@@ -1988,15 +1990,21 @@ function officialBoost(it: FeedItem): number {
 }
 
 /**
- * An item counts as 官方来源 only when its own URL is on an official host:
- * 江西省教育考试院官网的唯一域名是 www.jxeea.cn （专升本报名入口在该站
- * 「专升本考试」栏目）, plus 省教育厅 (.gov.cn) and 招生院校 (.edu.cn).
- * A media repost that merely quotes or retells an official notice is NOT an
- * official source — it is labelled 转载 in the UI instead.
+ * An item counts as 官方来源 only when its own URL is on one of the TWO
+ * official sites (user rule, 2026-11-23): 江西省教育考试院 www.jxeea.cn
+ * （专升本报名入口在该站「专升本考试」栏目） and 江西省教育厅
+ * jyt.jiangxi.gov.cn (the old jxedu.gov.cn no longer resolves and is
+ * never used). The 江西 column shows ONLY originals from these two
+ * sites: a media repost (eol.cn、搜狐、新浪、腾讯、人民网…) that merely
+ * quotes or retells an official notice is NOT shown at all — the
+ * official original is shown instead, and when no official original
+ * exists the item is skipped. This predicate is the single gate: it is
+ * applied at ingest in loadJiangxi and again on every getJiangxi read,
+ * so a cached payload is corrected on read-back too.
  */
 function isJiangxiOfficialUrl(url: string): boolean {
   const host = hostOf(url);
-  return host.endsWith("jxeea.cn") || host.endsWith(".edu.cn") || host.endsWith(".gov.cn");
+  return host === "jxeea.cn" || host.endsWith(".jxeea.cn") || host === "jyt.jiangxi.gov.cn";
 }
 
 function yearOf(text: string): string | null {
@@ -2033,9 +2041,9 @@ interface JiangxiItem {
   actionNeeded: string;
   /** Past-year material (before the user's 2028 exam year) — 备考参考 only. */
   isReference: boolean;
-  /** True only when the item's own URL is on jxeea.cn / .gov.cn / .edu.cn. */
+  /** True only when the item's own URL is on jxeea.cn / jyt.jiangxi.gov.cn (the only two official sites shown). */
   official: boolean;
-  /** True when the item is a media repost rather than an official page — never presented as 官方来源. */
+  /** Kept for schema compatibility; always false now — non-official reposts are filtered out, never shown. */
   repost: boolean;
   /** 2028 届正式通知 (2028 + official source) / 往年备考参考 / 尚待确认的动态. */
   noticeKind: JiangxiNoticeKind;
@@ -2382,14 +2390,16 @@ async function loadJiangxi(
   budget: RunBudget = newRunBudget(),
 ): Promise<{ items: JiangxiItem[]; asOf: string }> {
   if (!force) {
-    const cached = await readCache<JiangxiItem[]>(ctx, "jiangxi:all:v4", JIANGXI_TTL_MS);
+    const cached = await readCache<JiangxiItem[]>(ctx, "jiangxi:all:v5", JIANGXI_TTL_MS);
     if (cached) return { items: cached.data, asOf: cached.asOf };
   }
   const raw: FeedItem[] = [];
+  let fetchOk = false;
   await Promise.all(
     JIANGXI_QUERIES.map(async (q) => {
       try {
         raw.push(...(await fetchBingItems(q, "Bing 资讯", 15)));
+        fetchOk = true;
       } catch {
         // one query failing contributes nothing
       }
@@ -2402,6 +2412,14 @@ async function loadJiangxi(
       it.url = direct;
       if (isGnRelay(direct) || isBingClick(direct) || seen.has(direct)) return false;
       seen.add(direct);
+      // Official-only rule (2026-11-23): the 江西 column shows ONLY
+      // originals published on the two official sites — 江西省教育考试院
+      // jxeea.cn and 江西省教育厅 jyt.jiangxi.gov.cn. Reposts (eol.cn、
+      // 搜狐、新浪、腾讯、人民网…) are dropped even when they quote an
+      // official notice; when no official original exists the item is
+      // skipped, never filled in with a repost. An empty pool after this
+      // filter is the expected outcome on days with no new notice.
+      if (!isJiangxiOfficialUrl(direct)) return false;
       // Only 江西普通高校专升本 — drop 成人高考/自考/专套本 noise by title.
       if (!/专升本/.test(it.title)) return false;
       if (/成人高考|自学考试|自考/.test(it.title) && !/普通高校专升本|普通专升本/.test(it.title)) return false;
@@ -2428,8 +2446,16 @@ async function loadJiangxi(
     .slice(0, 18);
 
   if (deduped.length === 0) {
+    if (fetchOk) {
+      // The searches worked; there is simply no notice on the two
+      // official sites right now. An empty pool is the EXPECTED result
+      // of the official-only rule — not a refresh failure — so cache
+      // the empty list and let the UI show 「暂无新的官方公告」.
+      const asOf = await writeCache(ctx, "jiangxi:all:v5", [] as JiangxiItem[]);
+      return { items: [], asOf };
+    }
     await noteRefreshFailure(ctx);
-    const stale = await readCacheStale<JiangxiItem[]>(ctx, "jiangxi:all:v4");
+    const stale = await readCacheStale<JiangxiItem[]>(ctx, "jiangxi:all:v5");
     if (stale) return { items: stale.data, asOf: stale.asOf };
     return { items: [], asOf: new Date().toISOString() };
   }
@@ -2572,7 +2598,7 @@ async function loadJiangxi(
   const fixedItems = fixJiangxiList(items);
 
   await writeCache(ctx, "jiangxi:enrich:v1", boundedEnrichStore(store, deduped.map((d) => d.url)));
-  const asOf = await writeCache(ctx, "jiangxi:all:v4", fixedItems);
+  const asOf = await writeCache(ctx, "jiangxi:all:v5", fixedItems);
   return { items: fixedItems, asOf };
 }
 
@@ -4410,6 +4436,8 @@ const learningItemSchema = z.object({
   startHint: z.string().nullable().default(null),
   /** Display group: anytime （随时可学） / upcoming （近期可报名）; null = other opportunity (2026-11-23). */
   group: z.enum(["anytime", "upcoming"]).nullable().default(null),
+  /** True only for the hand-verified AI-learning curated courses — drives the 「AI 学习」 topic filter (2026-11-23). Pool items never carry it, so the Coursera blog stays out of the AI filter by construction. */
+  aiTopic: z.boolean().optional(),
 });
 
 const jiangxiItemSchema = z.object({
@@ -4523,7 +4551,7 @@ const JIANGXI_ARCHIVE_ITEMS: JiangxiArchiveItem[] = [
     docKind: "目录",
     attachmentUrl: "http://jyt.jiangxi.gov.cn/jxjyw/tzgg785/2001500515568979968/7Ul8fxAy.docx",
     summaryZh:
-      "2026 年专升本专业对照目录（《实施方案》附件 5）：信息安全技术应用（510203）属 51 电子与信息大类，对应理工类（序号 5），专业基础课为《高等数学及其应用》，可报本科方向为 0809 计算机类普通本科与 3102 计算机类职业本科。",
+      "指导目录见《实施方案》附件 5：本条链接是《江西省2026年普通高等学校专升本考试招生实施方案》的通知页，指导目录是该《实施方案》的附件 5，不是独立通知页。目录内容：信息安全技术应用（510203）属 51 电子与信息大类，对应理工类（序号 5），专业基础课为《高等数学及其应用》，可报本科方向为 0809 计算机类普通本科与 3102 计算机类职业本科。",
     points: [
       "位置：指导目录第 2–3 页、序号 5 理工类；“0809 计算机类、3102 计算机类（职业本科）”一行对应高职（专科）专业（类）栏写有“51 电子与信息大类”。",
       "报考类别：理工类（序号 5），不可跨类；公共基础课政治+英语+信息技术合卷（300 分）；专业基础课《高等数学及其应用》（150 分，见考试说明第 83–88 页）。",
@@ -4800,6 +4828,429 @@ const CURATED_LEARNING_ANYTIME: CuratedLearningItem[] = [
     enrichState: "stored",
     group: "anytime",
     audienceStage: "专科在读",
+  },
+];
+
+// ---------------------------------------------------------------------------
+// 学习栏「AI 学习」精选 (2026-11-23): seven hand-verified FREE Chinese AI
+// courses for a 专科在读生， carried as persistent curated content (they
+// never rotate with the daily fetch) and flagged aiTopic so the client's
+// 「AI 学习」 topic filter shows exactly this set inside the usual
+// 随时可学 / 近期可报名 groups. Every URL was opened and checked by the
+// researcher; all seven are free to learn (only the optional certificate
+// is paid) and need a free account, which each card states. Each card
+// states 能学什么 (summaryZh), 需要什么基础 (first point) and 从哪一课
+// 开始 (startHint). Deliberately NOT in this set: the Coursera blog post
+// 《Introducing AI Series on Coursera》 (it fronts a Coursera Plus paid
+// subscription — $49/月， 7-day trial needs payment details first — names
+// no single free course with Chinese subtitles, and targets working
+// professionals; it keeps its existing pool place in 随时可学 but never
+// enters the AI filter), and 吴恩达《AI for Everyone》 (only unofficial
+// Bilibili re-uploads were found; the official Coursera page's free-audit
+// entry and Chinese subtitles could not be verified). Honest gap, also
+// stated in the client's AI-filter note: no free Chinese course devoted
+// to "using AI to read security logs / verify model answers" was found —
+// the working order is Python basics (item 6) → verification method via
+// the DeepSeek / generative-AI courses (item 5 ch.3, item 4 ch.5 §5.9)
+// → the BIT security course's system view (item 7 ch.6 & 8).
+// ---------------------------------------------------------------------------
+
+const CURATED_LEARNING_AI: CuratedLearningItem[] = [
+  {
+    title: "人工智能应用基础（北京电子科技职业学院）",
+    url: "https://www.icourse163.org/course/DKY-1460382164",
+    readUrl: "https://www.icourse163.org/course/DKY-1460382164",
+    officialUrl: "https://www.icourse163.org/course/DKY-1460382164",
+    source: "中国大学MOOC / 北京电子科技职业学院",
+    publishedAt: null,
+    category: "courses",
+    summaryZh:
+      "能学什么：用生活案例加 Excel 手动计算，讲清监督学习、非监督学习、强化学习共 10 种常见算法——kNN、贝叶斯、决策树、支持向量机、集成学习、K-means、线性回归、神经网络、卷积网络、Q-learning。",
+    points: [
+      "需要什么基础：零基础可学，仅要求高中数学、统计学知识。",
+      "费用：免费学习，需免费注册账号选课；仅认证证书付费。",
+    ],
+    relevance: "适合零基础的专科在读生入门 AI：先把 10 种常见算法的基本思想弄懂，之后学任何 AI 工具都有底。",
+    startHint: "从第一章“距离的应用——k近邻算法”开始",
+    fee: "免费（需免费注册；认证证书付费）",
+    needsApplication: false,
+    deadline: null,
+    needsLogin: false,
+    blockedReason: null,
+    chineseUrl: null,
+    titleOnly: false,
+    enrichState: "stored",
+    group: "anytime",
+    audienceStage: "专科在读",
+    aiTopic: true,
+  },
+  {
+    title: "人工智能应用素养（南京信息职业技术学院）",
+    url: "https://www.icourse163.org/course/NJCIT-1468667162",
+    readUrl: "https://www.icourse163.org/course/NJCIT-1468667162",
+    officialUrl: "https://www.icourse163.org/course/NJCIT-1468667162",
+    source: "中国大学MOOC / 南京信息职业技术学院",
+    publishedAt: null,
+    category: "courses",
+    summaryZh:
+      "能学什么：面向大专在校生的 AI 通识课，讲 AI 概念与产业生态，用 6 个典型行业场景加入门实战，讲 AI 如何与本专业结合。",
+    points: [
+      "需要什么基础：掌握一门高级编程语言（如 Python，具基本编程思维）、会用 Windows 或 Linux、会检索资料；适合已接触过一点 Python 的学生。",
+      "费用：免费学习，需免费注册账号选课；仅认证证书付费。",
+    ],
+    relevance: "专为大专在校生设计的 AI 通识课，能帮你想清楚 AI 怎么和信息安全技术应用这个专业结合。",
+    startHint: "从第一章“人工智能应用生态概述——何为人工智能”开始",
+    fee: "免费（需免费注册；认证证书付费）",
+    needsApplication: false,
+    deadline: null,
+    needsLogin: false,
+    blockedReason: null,
+    chineseUrl: null,
+    titleOnly: false,
+    enrichState: "stored",
+    group: "anytime",
+    audienceStage: "专科在读",
+    aiTopic: true,
+  },
+  {
+    title: "人工智能基础（合肥工业大学）",
+    url: "https://www.icourse163.org/course/HFUT-1473162171?from=searchPage&outVendor=zw_mooc_pcssjg_",
+    readUrl: "https://www.icourse163.org/course/HFUT-1473162171?from=searchPage&outVendor=zw_mooc_pcssjg_",
+    officialUrl: "https://www.icourse163.org/course/HFUT-1473162171?from=searchPage&outVendor=zw_mooc_pcssjg_",
+    source: "中国大学MOOC / 合肥工业大学",
+    publishedAt: null,
+    category: "courses",
+    summaryZh:
+      "能学什么：面向非计算机专业学生的通识课，六部分覆盖计算机基础、AI 概述、常用大模型工具（提示词工程、AI 协同、辅助办公/多媒体/编程）、大模型原理（Transformer、DeepSeek 本地部署）、AI 创新应用（含信息安全拓展）、生成式 AI 大学生使用指南（隐私、学术诚信）。",
+    points: [
+      "需要什么基础：不要求 AI 或计算机专业背景。",
+      "费用：免费学习，需免费注册账号选课；仅认证证书付费。",
+    ],
+    relevance: "从大模型工具到原理都讲，还带信息安全拓展与隐私、学术诚信指南，适合专科在读生系统补一遍 AI 通识。",
+    startHint: "从第一讲“计算机基础”开始；已有计算机基础可直接跳到第三讲“常用大模型工具”",
+    fee: "免费（需免费注册；认证证书付费）",
+    needsApplication: false,
+    deadline: null,
+    needsLogin: false,
+    blockedReason: null,
+    chineseUrl: null,
+    titleOnly: false,
+    enrichState: "stored",
+    group: "anytime",
+    audienceStage: "专科在读",
+    aiTopic: true,
+  },
+  {
+    title: "生成式人工智能应用基础（杭州电子科技大学 林菲）",
+    url: "https://higher.smartedu.cn/course/agc3/69b56a1ff74ce762ce35271c?type=training",
+    readUrl: "https://higher.smartedu.cn/course/agc3/69b56a1ff74ce762ce35271c?type=training",
+    officialUrl: "https://higher.smartedu.cn/course/agc3/69b56a1ff74ce762ce35271c?type=training",
+    source: "国家高等教育智慧教育平台 / 杭州电子科技大学（林菲）",
+    publishedAt: null,
+    category: "courses",
+    summaryZh:
+      "能学什么：从 DeepSeek、Stable Diffusion 等工具实操到智能体搭建；重点是第 5 章“AIGC 赋能学习与研究”（AI 辅助阅读、论文高效解读、试题辅导、代码生成与优化）和第 6 章“AIGC 赋能办公与管理”。",
+    points: [
+      "需要什么基础：通识课，未见编程硬性要求，会用电脑即可。",
+      "费用：免费学习，需免费注册平台账号；仅认证证书付费。",
+    ],
+    relevance: "第 5 章直接教用 AI 辅助阅读、解读论文和生成优化代码，是把 AI 用到日常学习里最对口的一门。",
+    startHint:
+      "从第 1 章 1.1“什么是生成式人工智能”开始；只想立刻上手学习应用的，可先看第 3 章“提示词工程及其技巧”（3.1–3.6），再回看第 5 章",
+    fee: "免费（需免费注册平台账号；认证证书付费）",
+    needsApplication: false,
+    deadline: null,
+    needsLogin: false,
+    blockedReason: null,
+    chineseUrl: null,
+    titleOnly: false,
+    enrichState: "stored",
+    group: "anytime",
+    audienceStage: "专科在读",
+    aiTopic: true,
+  },
+  {
+    title: "AI实战：从零精通DeepSeek（杭州电子科技大学）",
+    url: "https://www.icourse163.org/course/HDU-1472762176?outVendor=zw_mooc_pcsybzkcph_",
+    readUrl: "https://www.icourse163.org/course/HDU-1472762176?outVendor=zw_mooc_pcsybzkcph_",
+    officialUrl: "https://www.icourse163.org/course/HDU-1472762176?outVendor=zw_mooc_pcsybzkcph_",
+    source: "中国大学MOOC / 杭州电子科技大学",
+    publishedAt: null,
+    category: "courses",
+    summaryZh:
+      "能学什么：以 DeepSeek 为工具的实战课，讲提示词设计、文本/图像/视频生成、用 DeepSeek 辅助代码编写与软件测试、搭建学业问答智能体，并有第 5 讲 AI 伦理与安全。",
+    points: [
+      "需要什么基础：基本计算机操作能力、对 AI 有初步兴趣、有初步编程概念即可。",
+      "费用：免费学习，需免费注册账号选课；仅认证证书付费。",
+    ],
+    relevance: "教你用 DeepSeek 辅助写代码与软件测试；第 3 讲正是练习“让 AI 生成代码、再核查它给的是否正确”的地方。",
+    startHint:
+      "从第 1 讲 1.1“智能路径的初步探索”开始；第 2 讲 2.1“提示词设计的核心原则”、第 3 讲 3.2“使用DeepSeek生成代码”与日常学习最直接相关",
+    fee: "免费（需免费注册；认证证书付费）",
+    needsApplication: false,
+    deadline: null,
+    needsLogin: false,
+    blockedReason: null,
+    chineseUrl: null,
+    titleOnly: false,
+    enrichState: "stored",
+    group: "anytime",
+    audienceStage: "专科在读",
+    aiTopic: true,
+  },
+  {
+    title: "Python编程基础与项目实践（重庆工商职业学院）",
+    url: "https://www.icourse163.org/course/CQTBI-1464043181?tid=1468391446",
+    readUrl: "https://www.icourse163.org/course/CQTBI-1464043181?tid=1468391446",
+    officialUrl: "https://www.icourse163.org/course/CQTBI-1464043181?tid=1468391446",
+    source: "中国大学MOOC / 重庆工商职业学院",
+    publishedAt: null,
+    category: "courses",
+    summaryZh:
+      "能学什么：零基础 Python 课，项目导向——环境安装、数据类型、流程控制、函数与模块、面向对象、扩展模块、网络爬虫；项目包括学生成绩管理系统、人脸识别考勤系统等，还融入网络爬虫犯罪、网络安全意识案例。",
+    points: [
+      "需要什么基础：针对 Python 初学者，零基础可学，只需先装好 Python 运行环境。",
+      "学完本课后，再用《AI实战：从零精通DeepSeek》第 3 讲练习“让 AI 解释/生成 Python 代码并核查它给的是否正确”。",
+      "费用：免费学习，需免费注册账号选课；仅认证证书付费。",
+    ],
+    relevance: "AI 学习路线的第一步：先有 Python 基础，才能判断 AI 给的代码对不对；课程案例还贴着网络安全。",
+    startHint: "先看“1.2 搭建Python编程环境”，再进项目一“学生成绩管理系统”",
+    fee: "免费（需免费注册；认证证书付费）",
+    needsApplication: false,
+    deadline: null,
+    needsLogin: false,
+    blockedReason: null,
+    chineseUrl: null,
+    titleOnly: false,
+    enrichState: "stored",
+    group: "anytime",
+    audienceStage: "专科在读",
+    aiTopic: true,
+  },
+  {
+    title: "网络安全——应用技术与工程实践（北京理工大学）",
+    url: "https://www.icourse163.org/course/0809BIT074-1449611164?outVendor=zw_mooc_pclszykctj_",
+    readUrl: "https://www.icourse163.org/course/0809BIT074-1449611164?outVendor=zw_mooc_pclszykctj_",
+    officialUrl: "https://www.icourse163.org/course/0809BIT074-1449611164?outVendor=zw_mooc_pclszykctj_",
+    source: "中国大学MOOC / 北京理工大学（国家一流课程）",
+    publishedAt: null,
+    category: "courses",
+    summaryZh:
+      "能学什么：从加密认证、防火墙、入侵检测到量子密码、区块链的网络安全技术体系与工程实践；其中与 AI 直接相关的是第 6 章“网络安全智能分析与反制技术”（风险评估、态势感知）和第 8 章 8.6“人工智能与网络安全”。",
+    points: [
+      "需要什么基础：建议具备计算机、网络、软件工程等信息化方面基础知识；零基础也可循序渐进，但建议有计算机/网络基础后再重点看第 6、8 章。",
+      "费用：免费学习，需免费注册账号选课；仅认证证书付费。",
+    ],
+    relevance: "AI 学习路线的最后一步：在安全体系里看 AI 的位置——第 6 章态势感知与 8.6 人工智能与网络安全，与你的专业最对口。",
+    startHint:
+      "从“网络安全应用技术与工程实践基础”开始；已有网络基础的，可直接从第 6 章 6.1“智能分析与反制的概念及技术体系”进入 AI+安全部分",
+    fee: "免费（需免费注册；认证证书付费）",
+    needsApplication: false,
+    deadline: null,
+    needsLogin: false,
+    blockedReason: null,
+    chineseUrl: null,
+    titleOnly: false,
+    enrichState: "stored",
+    group: "anytime",
+    audienceStage: "专科在读",
+    aiTopic: true,
+  },
+];
+
+// ---------------------------------------------------------------------------
+// 健身栏 (2026-11-23): twelve hand-verified free Chinese video tutorials
+// for basic exercises — 动作教学 only, deliberately NO training plan and
+// NO check-in feature. Persistent curated content (never rotates with
+// the daily fetch), served by getFitness. Every card carries exactly
+// six fields: 动作名称、所需器械、起始姿势、动作要点 (2–3)、一个常见
+// 错误、示范直达链接 (Bilibili 中文讲解； the plank video is an
+// English-narrated upload with Chinese subtitles, noted on its card).
+// Groups: 胸 2、背 2、腿臀 3、肩 2、核心 3.
+// ---------------------------------------------------------------------------
+
+const fitnessItemSchema = z.object({
+  name: z.string(),
+  group: z.enum(["胸", "背", "腿臀", "肩", "核心"]),
+  equipment: z.string(),
+  startPosition: z.string(),
+  points: z.array(z.string()),
+  commonMistake: z.string(),
+  videoUrl: z.string(),
+  /** Note about the demo video itself (e.g. subtitle language); null when none. */
+  videoNote: z.string().nullable().default(null),
+});
+
+type FitnessItemData = z.infer<typeof fitnessItemSchema>;
+
+const FITNESS_ITEMS: FitnessItemData[] = [
+  {
+    name: "俯卧撑",
+    group: "胸",
+    equipment: "徒手（瑜伽垫可选）",
+    startPosition: "双手撑地、间距略宽于肩，双腿伸直，头、髋、脚跟成一条直线",
+    points: [
+      "下放时手肘与身体约成 45°，不要外展成 T 形",
+      "全程收紧核心、夹紧臀部，身体保持一条直线",
+      "下放吸气、胸口贴近地面，推起呼气，手肘微屈不锁死",
+    ],
+    commonMistake: "塌腰或撅臀，身体呈波浪线上下抖动",
+    videoUrl: "https://www.bilibili.com/video/BV1vDaz6WEDA/",
+    videoNote: null,
+  },
+  {
+    name: "哑铃卧推",
+    group: "胸",
+    equipment: "哑铃一对＋平板卧推凳（无凳可躺地面做）",
+    startPosition: "仰卧于平板凳，双脚踩稳地面，双手各握一哑铃置于胸部两侧",
+    points: [
+      "肩胛骨后收下沉、贴紧凳面，全程不松掉",
+      "前臂始终垂直地面，不左右晃动",
+      "呼气上推、吸气下放，上推时手肘主动往中间靠拢",
+    ],
+    commonMistake: "肩胛骨松掉、耸肩推起，哑铃晃动、前臂歪斜",
+    videoUrl: "https://www.bilibili.com/video/BV1mD421J7o3/",
+    videoNote: null,
+  },
+  {
+    name: "引体向上",
+    group: "背",
+    equipment: "单杠（健身房高杠或小区单杠）",
+    startPosition: "双手正握单杠、略宽于肩，身体悬垂伸直，肩胛先下沉",
+    points: [
+      "先沉肩再拉，用背阔肌发力而非只靠手臂",
+      "拉至下巴过杠",
+      "缓慢有控制地下放，不自由落体",
+    ],
+    commonMistake: "耸肩硬拉，或靠摆动借力、只做半程",
+    videoUrl: "https://www.bilibili.com/video/BV1Guh667E4P/",
+    videoNote: null,
+  },
+  {
+    name: "哑铃划船",
+    group: "背",
+    equipment: "哑铃（单臂版另需一张平板凳支撑）",
+    startPosition: "双手握哑铃，充分屈髋俯身，挺胸收背、腰背挺直、收紧核心",
+    points: [
+      "身体与地面夹角小于 45°",
+      "呼气时肩胛骨后夹、手肘往后拉至大腿根部",
+      "吸气缓慢放回，身体不上下摆动",
+    ],
+    commonMistake: "弯腰弓背、核心松掉，或靠身体摆动借力拉起",
+    videoUrl: "https://www.bilibili.com/video/BV1Va411o7Mc/",
+    videoNote: null,
+  },
+  {
+    name: "杠铃深蹲",
+    group: "腿臀",
+    equipment: "杠铃＋深蹲架",
+    startPosition: "杠铃置于上背部斜方肌上，双脚与肩同宽、脚尖微向外展，挺胸收腹",
+    points: [
+      "先屈髋再屈膝，臀部向后坐",
+      "膝盖沿脚尖方向移动，不内扣",
+      "下蹲吸气、起身呼气，全程脚跟踩实发力",
+    ],
+    commonMistake: "膝盖内扣，或塌腰弓背、蹲太低出现“骨盆眨眼”",
+    videoUrl: "https://www.bilibili.com/video/BV1FU9LB5EGf/",
+    videoNote: null,
+  },
+  {
+    name: "臀桥",
+    group: "腿臀",
+    equipment: "徒手（进阶可用哑铃/杠铃负重）",
+    startPosition: "仰卧屈膝，双脚平放与肩同宽，手臂放于身体两侧",
+    points: [
+      "臀部发力，快起慢下",
+      "顶峰收紧臀部稍作停顿",
+      "腰背保持稳定，不用腰代偿",
+    ],
+    commonMistake: "腰部反弓、过度顶髋借力，或动作速度过快",
+    videoUrl: "https://www.bilibili.com/video/BV1Jg4y1z7Nm/",
+    videoNote: null,
+  },
+  {
+    name: "箭步蹲",
+    group: "腿臀",
+    equipment: "徒手起步，可选哑铃一对",
+    startPosition: "站立、躯干正直，双手握哑铃自然下垂于体侧",
+    points: [
+      "向前迈步、脚跟先着地，重心放前脚跟",
+      "前膝沿脚尖方向下蹲至约 90°",
+      "后膝弯曲但不触地，双脚始终朝向前方",
+    ],
+    commonMistake: "步幅太小，或双脚踩在一条直线上像走钢丝，失去平衡",
+    videoUrl: "https://www.bilibili.com/video/BV1Kz4y1D7R6/",
+    videoNote: null,
+  },
+  {
+    name: "哑铃推举（坐姿哑铃推肩）",
+    group: "肩",
+    equipment: "哑铃一对＋有靠背的坐凳",
+    startPosition: "坐于有靠背的凳上，哑铃放于膝盖远端，核心收紧、交替抬至肩部两侧",
+    points: [
+      "躯干微后仰、核心收紧",
+      "沿肩胛面画弧推起，小臂全程垂直地面",
+      "下落至眼睛位置即可，主动控制下放",
+    ],
+    commonMistake: "下落失控、被哑铃压下去，或推起时腰部大幅反弓借力",
+    videoUrl: "https://www.bilibili.com/video/BV1ym421M7DV/",
+    videoNote: null,
+  },
+  {
+    name: "哑铃侧平举",
+    group: "肩",
+    equipment: "哑铃一对（宜选轻重量）",
+    startPosition: "站立，双手各握一哑铃垂于体侧、掌心向内，微屈髋俯身、收紧核心",
+    points: [
+      "保持肩高于肘、肘高于手，向两侧抬至与肩齐平",
+      "匀速抬起，避免斜方肌代偿",
+      "缓慢有控制地下放至大腿根部附近",
+    ],
+    commonMistake: "耸肩借力，或用大重量甩动哑铃",
+    videoUrl: "https://www.bilibili.com/video/BV13fnvzpE8o/",
+    videoNote: null,
+  },
+  {
+    name: "平板支撑",
+    group: "核心",
+    equipment: "徒手（瑜伽垫）",
+    startPosition: "俯卧，双肘撑地位于肩关节正下方，前臂贴地，脚尖着地",
+    points: [
+      "手肘对准肩正下方，不前伸也不后移",
+      "头、肩、髋、脚踝成一条直线，收紧腹部和臀部",
+      "全程自然呼吸，不憋气",
+    ],
+    commonMistake: "下背塌陷或屁股抬高，身体不在一条直线上",
+    videoUrl: "https://www.bilibili.com/video/BV1mD4y1d7NF/",
+    videoNote: "英配中文字幕译制视频",
+  },
+  {
+    name: "卷腹",
+    group: "核心",
+    equipment: "徒手（瑜伽垫）",
+    startPosition: "仰卧屈膝，双脚平放与肩同宽，双手轻放耳旁或交叉于胸前",
+    points: [
+      "下背始终贴地，只卷起上背、肩胛骨离地即可",
+      "呼气卷起，顶端收紧腹肌停 1 秒",
+      "吸气缓慢有控制地下放",
+    ],
+    commonMistake: "双手抱头用力拉脖子借力，或幅度过大做成仰卧起坐、下背离地",
+    videoUrl: "https://www.bilibili.com/video/BV18J4m1w76p/",
+    videoNote: null,
+  },
+  {
+    name: "死虫式",
+    group: "核心",
+    equipment: "徒手（瑜伽垫）",
+    startPosition: "仰卧，双臂伸直指向天花板，双腿抬起、髋膝各弯曲约 90°",
+    points: [
+      "全程腰背贴地不拱起",
+      "对侧手脚缓慢交替伸展",
+      "动作放慢，核心始终收紧",
+    ],
+    commonMistake: "腰部拱起离地、出现弹响髋，或动作过快失控",
+    videoUrl: "https://www.bilibili.com/video/BV1tZ4y1q7qM/",
+    videoNote: null,
   },
 ];
 
@@ -5503,7 +5954,7 @@ export const Actions = {
       // Each column's content time is its own cache row's write time.
       const contentKey: Record<ColumnKey, string> = {
         learning: "learning:all:v2",
-        jiangxi: "jiangxi:all:v4",
+        jiangxi: "jiangxi:all:v5",
         overseas: "overseas:all:v20",
       };
       for (const r of rows) {
@@ -5666,7 +6117,7 @@ export const Actions = {
 
   getLearning: defineAction({
     description:
-      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生； since 2026-11-23 the stage signals — middle school(s), 中小学， 初中， 高中生， 中六， JUPAS, DSE, 研究生/硕士研究生 — are matched against title + summary + points + audienceStage together, so an item whose stage is stated only in its body, e.g. an HKU undergraduate item naming JUPAS/中六 in its points, is excluded too), pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships), activity write-ups whose summary dates the event in the past (\"X月X日……举行/举办/召开\" with no replay and no sign-up, e.g. the 东湖大咖公开课 report), 专硕/学硕 master's-stage items (e.g. the 专硕 dorm-policy news), scholarships limited to one local school district's students or to high-school students only (school district / juniors and seniors / high school football / high school athlete / 学区 / 高中生， e.g. the St. Joseph scholarship and the People high-school athlete scholarship story) and expired intakes are all filtered out, so the list may honestly be empty. HTML entities (&#…; and &…;, incl. double-encoded forms) are decoded in titles, points and summaries at ingest and on every read (2026-11-23), and an unenriched item's summary/relevance line is rebuilt from complete sentences of its own source summary — never cut mid-sentence and never a fabricated translation. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip. Since 2026-11-23 the list is split into two display groups via each item's group field: seven hand-verified free resources that can be started right now (CURATED_LEARNING_ANYTIME — 网络安全/英语公开课， authorised CTF practice, a Cambridge lecture recording; each with a startHint naming the first lesson or exercise) lead the items array as group=anytime, followed by pool courses/resources (also anytime); pool opportunities with a deadline in the next 30 days and a confirmed official entry are group=upcoming （近期可报名）; other opportunities keep group=null. The curated 近期可报名 set is empty this round — no official page was verified as explicitly open and free — so that group may honestly show its empty state. 自 2026-11-23 起，池内条目只有含真实可学内容（课程/讲座/回放/练习/实验）才进随时可学；纯政策新闻（征求意见稿、管理条例/办法类通知，如《教材管理条例（征求意见稿）》）由学习栏规则滤掉，永不为 group=anytime。",
+      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生； since 2026-11-23 the stage signals — middle school(s), 中小学， 初中， 高中生， 中六， JUPAS, DSE, 研究生/硕士研究生 — are matched against title + summary + points + audienceStage together, so an item whose stage is stated only in its body, e.g. an HKU undergraduate item naming JUPAS/中六 in its points, is excluded too), pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships), activity write-ups whose summary dates the event in the past (\"X月X日……举行/举办/召开\" with no replay and no sign-up, e.g. the 东湖大咖公开课 report), 专硕/学硕 master's-stage items (e.g. the 专硕 dorm-policy news), scholarships limited to one local school district's students or to high-school students only (school district / juniors and seniors / high school football / high school athlete / 学区 / 高中生， e.g. the St. Joseph scholarship and the People high-school athlete scholarship story) and expired intakes are all filtered out, so the list may honestly be empty. HTML entities (&#…; and &…;, incl. double-encoded forms) are decoded in titles, points and summaries at ingest and on every read (2026-11-23), and an unenriched item's summary/relevance line is rebuilt from complete sentences of its own source summary — never cut mid-sentence and never a fabricated translation. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip. Since 2026-11-23 the list is split into two display groups via each item's group field: seven hand-verified free resources that can be started right now (CURATED_LEARNING_ANYTIME — 网络安全/英语公开课， authorised CTF practice, a Cambridge lecture recording; each with a startHint naming the first lesson or exercise) lead the items array as group=anytime, followed by pool courses/resources (also anytime); pool opportunities with a deadline in the next 30 days and a confirmed official entry are group=upcoming （近期可报名）; other opportunities keep group=null. The curated 近期可报名 set is empty this round — no official page was verified as explicitly open and free — so that group may honestly show its empty state. 自 2026-11-23 起，池内条目只有含真实可学内容（课程/讲座/回放/练习/实验）才进随时可学；纯政策新闻（征求意见稿、管理条例/办法类通知，如《教材管理条例（征求意见稿）》）由学习栏规则滤掉，永不为 group=anytime。自 2026-11-23 起另有 7 门人工核实的免费中文 AI 课程（CURATED_LEARNING_AI）作为持久精选随随时可学一同返回，每门带 aiTopic=true 供客户端的「AI 学习」话题筛选使用（能学什么/需要什么基础/从哪一课开始都写在卡上；全部免费学习、需免费注册、仅认证证书付费）；池内条目永不带 aiTopic，所以 Coursera 博客《Introducing AI Series on Coursera》（背后是 Coursera Plus 付费订阅、无单门免费带中文字幕课程、面向在职人士）保留其随时可学池内位置但不进 AI 筛选，吴恩达《AI for Everyone》因只有非官方搬运、正版免费旁听与中文字幕未核实而不收录。",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -5731,8 +6182,25 @@ export const Actions = {
             ? "upcoming"
             : null) as "anytime" | "upcoming" | null,
       }));
-      return { items: [...CURATED_LEARNING_ANYTIME, ...grouped], deadlines, asOf };
+      // The seven hand-verified AI-learning courses (CURATED_LEARNING_AI,
+      // aiTopic=true) ride along as persistent curated anytime content,
+      // right after the original seven anytime resources — they bypass
+      // the pool pipeline exactly like those do, and the client's
+      // 「AI 学习」 topic filter selects on aiTopic, which pool items
+      // never carry (so the Coursera blog keeps its pool place in
+      // 随时可学 but never enters the AI filter).
+      return { items: [...CURATED_LEARNING_ANYTIME, ...CURATED_LEARNING_AI, ...grouped], deadlines, asOf };
     },
+  }),
+
+  getFitness: defineAction({
+    description:
+      "Returns the 健身 (fitness) column: twelve hand-verified free Chinese video tutorials for basic exercises, grouped 胸 (2) / 背 (2) / 腿臀 (3) / 肩 (2) / 核心 (3), covering bodyweight and common gym equipment. Each card carries exactly six fields — 动作名称、所需器械、起始姿势、动作要点 (2–3)、一个常见错误、示范直达链接 (Bilibili; the plank demo is English-narrated with Chinese subtitles, noted on the card). Persistent curated content: it never rotates with the daily refresh, and the column is 动作教学 only — deliberately no training plan and no check-in feature.",
+    request: z.object({}),
+    response: z.object({
+      items: z.array(fitnessItemSchema),
+    }),
+    handler: async (): Promise<{ items: FitnessItemData[] }> => ({ items: FITNESS_ITEMS }),
   }),
 
   getItemDetail: defineAction({
@@ -5836,7 +6304,7 @@ export const Actions = {
 
   getJiangxi: defineAction({
     description:
-      "Returns the 江西专升本 column for a Jiangxi 专科 student （信息安全技术应用， 2028 年毕业）: official-first notices about 报名/考试科目/专业对照/招生简章， each with applicable year, relevance to the major and what to do. Training-institution marketing （机构评测/测评等） and 高考择校 content for gaokao students choosing a 专科 school are hidden at ingest — he is already a second-year student. Ended exam-administration reminders （考区/考点/考场提醒、准考证提示 whose sitting has passed, e.g. the 2026 九江考区温馨提醒） are moved to history — filtered at ingest AND on every read so cached payloads obey too — while lasting-value material （考试科目/专业对照/招生方案/实施方案/报名流程/分数线） stays visible. Past-year items are flagged isReference （备考参考）; the pending list marks each 2028 matter as 待公布 until a 2028 notice covers it. Tags are content-derived deterministically at ingest and on every read (2026-11-22): 分数线/录取控制线/投档线/录取结果 → 录取， 报名流程/报名通知/报考 → 报名， 考试时间/科目安排/准考证 → 考试科目 — a score-line announcement can never stay tagged 报名. A missing applicable year is derived from the title, then the summary, then the publish date, so dated past-year material always shows its year. Relevance lines are per-item, grounded in the item's own tag/title/year; the old shared template (or any relevance repeated verbatim across items) is replaced on every read. Within a tag the line follows the title's own content signal (2026-11-23): 报名条件/报考指南 vs 报名流程/详细报考步骤 get different lines, as do 分数线/录取控制线 vs 录取人数/录取结果 — and a final column-level pass guarantees no two items in the column carry the identical relevance sentence, appending a clause built from the item's own title phrase when a repeat survives. Official sources (jxeea.cn / .gov.cn / .edu.cn) sort first inside each group. Since 2026-11-23 the response also carries archive: five hand-verified 2026 official documents （往年官方备考资料 — 报名通知/考试说明/专业对照目录/录取控制分数线/考试招生工作通知， from jxeea.cn and jyt.jiangxi.gov.cn, each with docKind and, where one exists, an attachmentUrl next to the notice page). Verified: the 2026 exam was held 2026-03-29 and score lines published 2026-04-18; neither official site publishes 2026 真题 and the 考试说明 has no 例题/样题， so no 真题 item exists — the client states that honestly above the archive.",
+      "Returns the 江西专升本 column for a Jiangxi 专科 student （信息安全技术应用， 2028 年毕业）: official-first notices about 报名/考试科目/专业对照/招生简章， each with applicable year, relevance to the major and what to do. Training-institution marketing （机构评测/测评等） and 高考择校 content for gaokao students choosing a 专科 school are hidden at ingest — he is already a second-year student. Ended exam-administration reminders （考区/考点/考场提醒、准考证提示 whose sitting has passed, e.g. the 2026 九江考区温馨提醒） are moved to history — filtered at ingest AND on every read so cached payloads obey too — while lasting-value material （考试科目/专业对照/招生方案/实施方案/报名流程/分数线） stays visible. Past-year items are flagged isReference （备考参考）; the pending list marks each 2028 matter as 待公布 until a 2028 notice covers it. Tags are content-derived deterministically at ingest and on every read (2026-11-22): 分数线/录取控制线/投档线/录取结果 → 录取， 报名流程/报名通知/报考 → 报名， 考试时间/科目安排/准考证 → 考试科目 — a score-line announcement can never stay tagged 报名. A missing applicable year is derived from the title, then the summary, then the publish date, so dated past-year material always shows its year. Relevance lines are per-item, grounded in the item's own tag/title/year; the old shared template (or any relevance repeated verbatim across items) is replaced on every read. Within a tag the line follows the title's own content signal (2026-11-23): 报名条件/报考指南 vs 报名流程/详细报考步骤 get different lines, as do 分数线/录取控制线 vs 录取人数/录取结果 — and a final column-level pass guarantees no two items in the column carry the identical relevance sentence, appending a clause built from the item's own title phrase when a repeat survives. Official sources (jxeea.cn / .gov.cn / .edu.cn) sort first inside each group. Since 2026-11-23 the response also carries archive: five hand-verified 2026 official documents （往年官方备考资料 — 报名通知/考试说明/专业对照目录/录取控制分数线/考试招生工作通知， from jxeea.cn and jyt.jiangxi.gov.cn, each with docKind and, where one exists, an attachmentUrl next to the notice page). Verified: the 2026 exam was held 2026-03-29 and score lines published 2026-04-18; neither official site publishes 2026 真题 and the 考试说明 has no 例题/样题， so no 真题 item exists — the client states that honestly above the archive. Since 2026-11-23 the WHOLE column (homepage first column, this action and the archive) shows ONLY originals published on the two official sites — 江西省教育考试院 jxeea.cn and 江西省教育厅 jyt.jiangxi.gov.cn (the dead jxedu.gov.cn is never used): the deterministic official-only filter runs at ingest in loadJiangxi and again on every read of this action, so reposts (eol.cn、搜狐、新浪、腾讯、人民网…) never appear even when they quote an official notice, and an empty pool is the expected result on days with no new official notice (the UI then shows 「暂无新的官方公告」 above the archive).",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -5848,12 +6316,20 @@ export const Actions = {
     async handler(ctx, args) {
       const loaded = await loadJiangxi(ctx, args.force);
       const asOf = loaded.asOf;
-      // Read-time application of the ended-reminder rule, so a payload
-      // cached before the rule existed is filtered on every response too:
-      // ended 考区/考点/准考证 reminders leave the visible list, while
-      // 考试科目/专业对照/招生方案 material stays （备考参考）.
+      // Read-time application of two rules, so a payload cached before
+      // a rule existed is corrected on every response too:
+      // (1) official-only (2026-11-23) — the pool may contain ONLY
+      // originals from 江西省教育考试院 jxeea.cn and 江西省教育厅
+      // jyt.jiangxi.gov.cn; every repost is dropped here even if it
+      // entered the cache earlier (the pre-rule cache held 11 reposts;
+      // an empty pool after this filter is the expected outcome and
+      // the UI shows 「暂无新的官方公告」).
+      // (2) ended 考区/考点/准考证 reminders leave the visible list,
+      // while 考试科目/专业对照/招生方案 material stays （备考参考）.
       const items = fixJiangxiList(
-        loaded.items.filter((it) => !isJiangxiEndedExamReminder(it.title, it.publishedAt)),
+        loaded.items.filter(
+          (it) => isJiangxiOfficialUrl(it.url) && !isJiangxiEndedExamReminder(it.title, it.publishedAt),
+        ),
       );
       const current = items.filter((it) => !it.isReference);
       const covers = (tag: JiangxiTag) => current.some((it) => it.tag === tag);

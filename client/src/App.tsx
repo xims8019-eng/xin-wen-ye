@@ -11,6 +11,7 @@ type OverseasItem = ApiResponse<typeof api, "getOverseas">["items"][number];
 type WorldItem = ApiResponse<typeof api, "getMyWorld">["daily"][number];
 type DigestItem = ApiResponse<typeof api, "getDailyDigest">["items"][number];
 type HotSource = ApiResponse<typeof api, "getHotLists">["sources"][number];
+type FitnessItem = ApiResponse<typeof api, "getFitness">["items"][number];
 
 const OVERSEAS_COUNTRIES = ["美国", "新西兰", "新加坡", "越南", "日本", "韩国", "爱尔兰", "英国"];
 const STUDY_STAGES: Array<{ id: string; label: string }> = [
@@ -27,7 +28,7 @@ function stageLabel(item: OverseasItem): string {
   const map = item.category === "study" ? STUDY_STAGES : WORK_STAGES;
   return map.find((x) => x.id === item.stage)?.label ?? (item.category === "work_visa" && item.kind === "policy" ? "签证/移民政策" : "阶段未说明");
 }
-type Tab = "home" | "news" | "learning" | "feeds" | "saved";
+type Tab = "home" | "news" | "learning" | "fitness" | "feeds" | "saved";
 
 const LEARNING_CATEGORIES: Array<{ id: LearningCategory; label: string }> = [
   { id: "courses", label: "课程与讲座" },
@@ -327,6 +328,9 @@ function LearningRow({ item }: { item: LearningItem }) {
           ) : null}
           <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-[var(--dim)]">
             <span className="rounded-full border border-[var(--border)] px-2 py-0.5 font-medium text-[var(--text)]">{catLabel}</span>
+            {item.aiTopic ? (
+              <span className="rounded-full bg-[var(--accent)] px-2 py-0.5 font-medium text-white">AI 学习</span>
+            ) : null}
             {!item.titleOnly && item.enrichState === "new" ? (
               <span className="rounded-full bg-[var(--accent)] px-2 py-0.5 font-medium text-white">本次新整理</span>
             ) : !item.titleOnly && item.enrichState === "stored" ? (
@@ -470,6 +474,56 @@ function DeadlineAlerts({ deadlines }: { deadlines: LearningItem[] }) {
   );
 }
 
+type LearningTopic = "all" | "ai";
+
+function LearningTopicFilter({
+  topic,
+  onChange,
+}: {
+  topic: LearningTopic;
+  onChange: (t: LearningTopic) => void;
+}) {
+  const chips: Array<{ id: LearningTopic; label: string }> = [
+    { id: "all", label: "全部话题" },
+    { id: "ai", label: "AI 学习" },
+  ];
+  return (
+    <div className="mt-4 flex flex-wrap gap-2" role="tablist" aria-label="学习话题筛选">
+      {chips.map((c) => (
+        <button
+          key={c.id}
+          type="button"
+          role="tab"
+          aria-selected={topic === c.id}
+          onClick={() => onChange(c.id)}
+          className={`rounded-full px-3.5 text-sm ${
+            topic === c.id
+              ? "bg-[var(--accent)] font-semibold text-white"
+              : "border border-[var(--border)] text-[var(--text)]"
+          }`}
+        >
+          {c.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function AiLearningNote() {
+  return (
+    <div className="mt-3 rounded-[var(--radius)] bg-[var(--space-surface-alt)] p-3 text-sm leading-relaxed text-[var(--dim)]" role="note" aria-label="AI 学习筛选说明">
+      <p>
+        <span className="font-medium text-[var(--text)]">先说清楚：</span>
+        没有找到一门专门讲「用 AI 解读安全日志 / 核查模型回答是否正确」的免费中文课程，这 7 门不冒充有。正确的使用顺序是：先学 Python 基础（第 6 门《Python编程基础与项目实践》）→ 再用 DeepSeek / 生成式课程学核查方法（第 5 门第 3 讲、第 4 门第 5 章 5.9「代码生成与优化」）→ 最后用北理工安全课学安全体系（第 7 门第 6、8 章）。7 门全部免费学习、需免费注册，仅认证证书付费。
+      </p>
+      <p className="mt-2">
+        <span className="font-medium text-[var(--text)]">复核记录：</span>
+        Coursera 博客《Introducing AI Series on Coursera》背后是 Coursera Plus 付费订阅（$49/月，7 天试用要先绑支付信息，属限时试听），没有指向某一门可直接进入、免费、带中文字幕的具体课程，且系列面向已有本领域工作经验的在职专业人士、不适合专科在读入门，故不纳入「AI 学习」筛选；它在「随时可学」里的原有位置保留不动。吴恩达《AI for Everyone》仅有 B 站非官方搬运合集，正版 Coursera 页未能核实到免费旁听入口与中文字幕说明，本次也不纳入。
+      </p>
+    </div>
+  );
+}
+
 function LearningSection({ onGoLearning }: { onGoLearning: () => void }) {
   const queryClient = useQueryClient();
   const learning = useQuery({ queryKey: ["learning"], queryFn: () => api.getLearning({ force: false }) });
@@ -481,7 +535,8 @@ function LearningSection({ onGoLearning }: { onGoLearning: () => void }) {
     },
     onError: () => {},
   });
-  const allItems = learning.data?.items ?? [];
+  const [topic, setTopic] = useState<LearningTopic>("all");
+  const allItems = (learning.data?.items ?? []).filter((it) => topic === "all" || it.aiTopic === true);
   const anytime = allItems.filter((it) => it.group === "anytime");
   const upcoming = allItems.filter((it) => it.group === "upcoming");
   const others = allItems.filter((it) => it.group !== "anytime" && it.group !== "upcoming");
@@ -507,9 +562,14 @@ function LearningSection({ onGoLearning }: { onGoLearning: () => void }) {
         <button type="button" className="font-medium text-[var(--accent)]" onClick={() => document.getElementById("overseas-work")?.scrollIntoView({ behavior: "smooth" })}>点这里去看实习与岗位 →</button>
       </p>
 
-      <div className="mt-4">
-        <DeadlineAlerts deadlines={learning.data?.deadlines ?? []} />
-      </div>
+      <LearningTopicFilter topic={topic} onChange={setTopic} />
+      {topic === "ai" ? <AiLearningNote /> : null}
+
+      {topic === "all" ? (
+        <div className="mt-4">
+          <DeadlineAlerts deadlines={learning.data?.deadlines ?? []} />
+        </div>
+      ) : null}
 
       {learning.isPending ? (
         <p className="py-8 text-sm text-[var(--dim)]">正在取学习资讯…</p>
@@ -572,7 +632,8 @@ function LearningView() {
     },
     onError: () => {},
   });
-  const items = learning.data?.items ?? [];
+  const [topic, setTopic] = useState<LearningTopic>("all");
+  const items = (learning.data?.items ?? []).filter((it) => topic === "all" || it.aiTopic === true);
   const anytime = items.filter((it) => it.group === "anytime");
   const upcoming = items.filter((it) => it.group === "upcoming");
   const others = items.filter((it) => it.group !== "anytime" && it.group !== "upcoming");
@@ -596,9 +657,14 @@ function LearningView() {
       </div>
       <p className="mt-1 text-xs text-[var(--dim)]">每条一句中文说清适合谁、能学到什么，并标出学段、费用和官方入口；官方没公布的写「未公布」。需要报名的显示截止日期，已截止的会标注并不进入快截止提醒。最新发布的排在前面。</p>
 
-      <div className="mt-4">
-        <DeadlineAlerts deadlines={learning.data?.deadlines ?? []} />
-      </div>
+      <LearningTopicFilter topic={topic} onChange={setTopic} />
+      {topic === "ai" ? <AiLearningNote /> : null}
+
+      {topic === "all" ? (
+        <div className="mt-4">
+          <DeadlineAlerts deadlines={learning.data?.deadlines ?? []} />
+        </div>
+      ) : null}
 
       {learning.isPending ? (
         <p className="py-8 text-sm text-[var(--dim)]">正在取学习资讯…</p>
@@ -645,6 +711,122 @@ function LearningView() {
           ) : null}
         </>
       )}
+    </section>
+  );
+}
+
+const FITNESS_GROUPS: Array<{ id: string; label: string }> = [
+  { id: "全部", label: "全部" },
+  { id: "胸", label: "胸" },
+  { id: "背", label: "背" },
+  { id: "腿臀", label: "腿臀" },
+  { id: "肩", label: "肩" },
+  { id: "核心", label: "核心" },
+];
+
+function FitnessCard({ item }: { item: FitnessItem }) {
+  return (
+    <li className="rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-4">
+      <p className="flex flex-wrap items-center gap-2">
+        <span className="font-headline text-[17px] font-bold leading-snug text-[var(--text)]">{item.name}</span>
+        <span className="rounded-full bg-[var(--space-surface-alt)] px-2 py-0.5 text-xs font-medium text-[var(--text)]">{item.group}</span>
+      </p>
+      <dl className="mt-2 space-y-1.5 text-sm leading-relaxed">
+        <div>
+          <dt className="inline font-medium text-[var(--text)]">所需器械：</dt>
+          <dd className="inline text-[var(--dim)]">{item.equipment}</dd>
+        </div>
+        <div>
+          <dt className="inline font-medium text-[var(--text)]">起始姿势：</dt>
+          <dd className="inline text-[var(--dim)]">{item.startPosition}</dd>
+        </div>
+        <div>
+          <dt className="font-medium text-[var(--text)]">动作要点：</dt>
+          <dd>
+            <ol className="list-decimal space-y-0.5 pl-5 text-[var(--dim)]">
+              {item.points.map((p, i) => (
+                <li key={i}>{p}</li>
+              ))}
+            </ol>
+          </dd>
+        </div>
+        <div>
+          <dt className="inline font-medium text-[var(--text)]">常见错误：</dt>
+          <dd className="inline text-[var(--dim)]">{item.commonMistake}</dd>
+        </div>
+      </dl>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <ViewOriginalButton url={item.videoUrl} label="看示范视频" />
+        {item.videoNote ? <span className="text-xs text-[var(--dim)]">{item.videoNote}</span> : null}
+      </div>
+    </li>
+  );
+}
+
+function FitnessBrowser() {
+  const [group, setGroup] = useState("全部");
+  const q = useQuery({ queryKey: ["fitness"], queryFn: () => api.getFitness({}) });
+  const all = q.data?.items ?? [];
+  const items = all.filter((it) => group === "全部" || it.group === group);
+  return (
+    <>
+      <div className="mt-3 flex flex-wrap gap-2" role="tablist" aria-label="健身按部位筛选">
+        {FITNESS_GROUPS.map((g) => {
+          const count = g.id === "全部" ? all.length : all.filter((it) => it.group === g.id).length;
+          return (
+            <button
+              key={g.id}
+              type="button"
+              role="tab"
+              aria-selected={group === g.id}
+              onClick={() => setGroup(g.id)}
+              className={`rounded-full px-3.5 text-sm ${
+                group === g.id
+                  ? "bg-[var(--accent)] font-semibold text-white"
+                  : "border border-[var(--border)] text-[var(--text)]"
+              }`}
+            >
+              {g.label}
+              {count > 0 ? ` ${count}` : ""}
+            </button>
+          );
+        })}
+      </div>
+      {q.isPending ? (
+        <p className="py-6 text-sm text-[var(--dim)]">正在取动作教学…</p>
+      ) : items.length === 0 ? (
+        <p className="py-6 text-sm text-[var(--dim)]">这个部位暂时没有动作，换个部位看看。</p>
+      ) : (
+        <ul className="mt-4 grid gap-3 sm:grid-cols-2">
+          {items.map((item) => (
+            <FitnessCard key={item.name} item={item} />
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
+
+function FitnessSection() {
+  return (
+    <section aria-label="健身栏目" className="mt-10 border-t-2 border-[var(--text)] pt-5">
+      <h3 className="font-headline text-xl font-black text-[var(--text)]">健身 · 动作教学</h3>
+      <p className="mt-1 text-xs text-[var(--dim)]">
+        只做动作教学：选一个动作，看懂起始姿势和要点，再打开示范视频跟着练。徒手与常见健身房器械，示范均为免费中文讲解视频。
+      </p>
+      <FitnessBrowser />
+    </section>
+  );
+}
+
+function FitnessView() {
+  return (
+    <section>
+      <h3 className="font-headline text-lg font-bold text-[var(--text)]">健身 · 动作教学</h3>
+      <p className="mt-1 text-xs text-[var(--dim)]">
+        只做动作教学，没有训练计划和打卡：按部位选一个动作，看懂怎么做，再打开示范视频开始练习。每张卡只有跟练要用的六项：器械、起始姿势、动作要点、常见错误和示范链接。
+      </p>
+      <FitnessBrowser />
     </section>
   );
 }
@@ -764,7 +946,7 @@ function JiangxiSection() {
         </div>
       </div>
       <p className="mt-1 text-xs text-[var(--dim)]">
-        为信息安全技术应用专业、2028 年毕业的你固定置顶 · 优先江西省教育考试院、省教育厅和招生院校的通知 · 官方来源认准江西省教育考试院官网 www.jxeea.cn（站内「专升本考试」栏目），非官方条目标「转载」
+        为信息安全技术应用专业、2028 年毕业的你固定置顶 · 本栏只展示两个官网发布的原文：江西省教育考试院 www.jxeea.cn（站内「专升本考试」栏目）与江西省教育厅 jyt.jiangxi.gov.cn · 转载文章即使引用了官方通知也不收录，找不到官网原文就跳过
       </p>
       {(q.data?.pending ?? []).length > 0 ? (
         <ul className="mt-3 space-y-1.5" aria-label="2028年待公布事项">
@@ -782,23 +964,15 @@ function JiangxiSection() {
           ))}
         </ul>
       ) : null}
-      {(q.data?.archive ?? []).length > 0 ? (
-        <div className="mt-5">
-          <h4 className="font-headline text-base font-bold text-[var(--text)]">往年官方备考资料</h4>
-          <p className="mt-1 text-xs leading-relaxed text-[var(--dim)]">
-            官方真题：经核查，考试院与教育厅官网未公开 2026 年专升本真题；《考试说明》中也没有例题、样题。备考以《考试说明》的考试范围、题型与参考书目为准。
-          </p>
-          <ul>
-            {(q.data?.archive ?? []).map((item) => (
-              <JiangxiRow key={item.url} item={item} />
-            ))}
-          </ul>
-        </div>
-      ) : null}
       {q.isPending ? (
         <p className="py-6 text-sm text-[var(--dim)]">正在取专升本通知…</p>
       ) : items.length === 0 ? (
-        <p className="py-6 text-sm text-[var(--dim)]">暂时没取到专升本通知，点刷新再试。2028 年的报名、考试科目、专业对照和招生简章公布后会出现在这里。</p>
+        <div className="py-6">
+          <p className="text-sm font-medium text-[var(--text)]">暂无新的官方公告</p>
+          <p className="mt-1 text-sm leading-relaxed text-[var(--dim)]">
+            本栏只收江西省教育考试院与江西省教育厅官网的原文，转载不收录；有新公告时会出现在这里。2028 年的报名、考试科目、专业对照和招生简章公布后也会出现在这里，下面的往年官方备考资料可先作参考。
+          </p>
+        </div>
       ) : (
         <>
           {current.length > 0 ? (
@@ -822,6 +996,19 @@ function JiangxiSection() {
           ) : null}
         </>
       )}
+      {(q.data?.archive ?? []).length > 0 ? (
+        <div className="mt-5">
+          <h4 className="font-headline text-base font-bold text-[var(--text)]">往年官方备考资料</h4>
+          <p className="mt-1 text-xs leading-relaxed text-[var(--dim)]">
+            官方真题：截至 2026 年 11 月 23 日，暂未在这两个官网查到可免费下载的官方真题（已查考试院专升本栏目站内搜索、教育厅站内搜索与 5 条官方通知全文，找到的都是第三方回忆卷）。大纲样题同样没有：《考试说明》PDF 全文检索「例题」「样题」「示例」「题型示例」均为 0 命中。备考以《考试说明》的考试范围、题型与参考书目为准。
+          </p>
+          <ul>
+            {(q.data?.archive ?? []).map((item) => (
+              <JiangxiRow key={item.url} item={item} />
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -1321,6 +1508,7 @@ function HomeView({ onGoLearning }: { onGoLearning: () => void }) {
       <RecentApplicableSection />
       <WorldSection />
       <LearningSection onGoLearning={onGoLearning} />
+      <FitnessSection />
       <OverseasCategorySection category="study" />
       <OverseasCategorySection category="work_visa" />
       <HotSection />
@@ -1633,6 +1821,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "home", label: "首页" },
   { id: "news", label: "资讯" },
   { id: "learning", label: "学习" },
+  { id: "fitness", label: "健身" },
   { id: "feeds", label: "订阅" },
   { id: "saved", label: "收藏" },
 ];
@@ -1746,6 +1935,7 @@ export function App() {
         {tab === "home" ? <HomeView onGoLearning={() => setTab("learning")} /> : null}
         {tab === "news" ? <div className="mx-auto max-w-3xl"><NewsView /></div> : null}
         {tab === "learning" ? <div className="mx-auto max-w-3xl"><LearningView /></div> : null}
+        {tab === "fitness" ? <div className="mx-auto max-w-3xl"><FitnessView /></div> : null}
         {tab === "feeds" ? <div className="mx-auto max-w-3xl"><FeedsView /></div> : null}
         {tab === "saved" ? <div className="mx-auto max-w-3xl"><SavedView /></div> : null}
       </main>
