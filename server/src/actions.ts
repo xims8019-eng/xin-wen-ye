@@ -1270,6 +1270,80 @@ function isPolicyNewsWithoutLearnableContent(item: {
 }
 
 /**
+ * Promo-blog / trial-only items have no concrete free learning entry
+ * (user, 2026-11-23 t-round): a blog article that merely ANNOUNCES a
+ * series / collection / learning plan is not a resource the user can
+ * start learning from. The named case is the Coursera blog
+ * "Introducing AI Series on Coursera: 12 Expert-curated learning plans
+ * to help you apply AI in your field" (blog.coursera.org — behind it
+ * sits Coursera Plus, $49/month with a 7-day trial that needs payment
+ * details; it names no single directly-enterable free course with
+ * Chinese subtitles and targets working professionals). The rule needs
+ * ALL THREE signals, so a real course is untouched: (a) a blog/article
+ * host (blog. subdomain, /blog/ path, or a 博客 source); (b) a title
+ * announcing a series / collection / plan rather than naming a
+ * specific course; (c) NO free-learning evidence anywhere in the
+ * item's own text. A blog post that does state free learning stays.
+ */
+function isPromoBlogWithoutFreeEntry(item: {
+  title: string;
+  summaryZh?: string | null;
+  points?: string[];
+  url?: string | null;
+  source?: string | null;
+}): boolean {
+  const url = item.url ?? "";
+  const isBlogHost =
+    /:\/\/blog\./i.test(url) || /\/blog\//i.test(url) || /博客/.test(item.source ?? "");
+  if (!isBlogHost) return false;
+  const announcesSeries =
+    /introducing|推出|发布|上线|官宣|全新/i.test(item.title) &&
+    /series|系列|学习计划|合集|专栏/i.test(`${item.title} ${item.summaryZh ?? ""}`);
+  if (!announcesSeries) return false;
+  const text = `${item.title} ${item.summaryZh ?? ""} ${(item.points ?? []).join(" ")}`;
+  // Full free learning stated → it has a verifiable free entry; keep it.
+  if (/免费(学习|选课|旁听|开放|注册)|可免费(学习|选课)|免费.*全部/i.test(text)) return false;
+  return !/免费/.test(text);
+}
+
+/**
+ * Already-awarded reports are not application opportunities (user,
+ * 2026-11-23 t-round): the named case is the Lokmat Times report
+ * "Airtel Foundation Grants 55 Engineering Scholarships to Chandigarh
+ * University Students, Totaling Rs 7.7 Crore" — "has awarded 55
+ * scholarships to engineering students at Chandigarh University" — the
+ * scholarships are already GIVEN to one named university's students;
+ * there is no open application window and a Jiangxi 专科 student is
+ * not in scope. The standing rule already drops awards-announced items
+ * （获奖名单/颁奖 in Chinese titles); this adds the English awarded /
+ * grants shape and the Chinese 已发放/已颁发 shape. An item that also
+ * states applications are open is never caught.
+ */
+function isAlreadyAwardedReport(item: {
+  title: string;
+  summaryZh?: string | null;
+  points?: string[];
+}): boolean {
+  const text = `${item.title} ${item.summaryZh ?? ""} ${(item.points ?? []).join(" ")}`;
+  if (
+    /报名开放|正在报名|现正接受申请|接受申请|开始申请|申请开放|open for applications|now accepting applications|applications (are |now )?open/i.test(
+      text,
+    )
+  )
+    return false;
+  return (
+    /(has|have)\s+(awarded|granted|presented|distributed)\b[^。]{0,50}\b(scholarships?|awards?|grants?|prizes?)\b/i.test(
+      text,
+    ) ||
+    /\b(grants?|awards?|presents?|distributes?)\b[^。]{0,30}?\d+\b[^。]{0,30}\b(scholarships?|awards?|grants?)\b/i.test(
+      text,
+    ) ||
+    /已(向|给|为|经)[^。]{0,20}(发放|颁发|授予)/.test(text) ||
+    /已(发放|颁发|授予)/.test(text)
+  );
+}
+
+/**
  * Learning-column rule (user, 2026-11-22): category 4 （学习与实践） keeps
  * ONLY what the user can still act on — skills competitions, free courses
  * or labs, language learning and language-exam registration that he can
@@ -1318,6 +1392,8 @@ function isLearningNotActionable(
     audienceStage: string | null;
     deadline: string | null;
     needsApplication?: boolean;
+    url?: string | null;
+    source?: string | null;
   },
   todayStr: string,
 ): boolean {
@@ -1488,6 +1564,28 @@ function isLearningNotActionable(
   // actionable signal below. Shared by ingest, every getLearning read
   // and the getDailyDigest learning loop via this one function.
   if (isPolicyNewsWithoutLearnableContent(item)) return true;
+  // Promo blog / trial-only items with no concrete free learning entry
+  // (user, 2026-11-23 t-round): a series announcement on a blog host
+  // with no free-learning evidence in its own text is not a resource
+  // the user can start — the Coursera blog case. A real course on a
+  // course platform, or a blog post that does state free learning, is
+  // untouched by the helper's three-signal conjunction.
+  if (isPromoBlogWithoutFreeEntry(item)) return true;
+  // Limited-time trial only, with no full free-learning statement
+  // (user, 2026-11-23 t-round): 免费试听 / 试听 / 试用 / 限时体验
+  // means the free scope cannot be verified — out, unless the item
+  // also states the course itself can be learned for free.
+  if (
+    /限时(免费|试听|体验)|免费试听|试听|试用/i.test(text) &&
+    !/免费(学习|选课|旁听|开放|注册)|可免费(学习|选课)|免费.*全部/i.test(text)
+  )
+    return true;
+  // Already-awarded reports (user, 2026-11-23 t-round): scholarships
+  // or awards already granted to named recipients, with no open
+  // application window — the Airtel case. The standing rule already
+  // drops awards-announced items; this covers the English/已发放
+  // phrasings it missed.
+  if (isAlreadyAwardedReport(item)) return true;
   // No actionable signal at all → a pure news report, an advice essay or
   // a product/company story (the UN climate report, the AI-interviewer
   // news, the MIT program write-ups, the Workday integration story).
@@ -1856,6 +1954,8 @@ async function loadLearning(
           audienceStage: entry?.audienceStage ?? null,
           deadline: entry?.deadline ?? null,
           needsApplication: entry?.needsApplication ?? it.hint === "opportunities",
+          url: it.url,
+          source: it.source,
         },
         todayStrL,
       )
@@ -1940,11 +2040,18 @@ const WFYI_SCHOLARSHIP_URL =
 
 function correctLearningItem(it: LearningItem): LearningItem {
   const blockedReason = it.blockedReason ?? cnBlockedReason(it.readUrl ?? it.url);
+  // Already-awarded reports never need an application (user, 2026-11-23
+  // t-round): the Airtel item was stored with needsApplication=true
+  // although its 55 scholarships were already granted to one named
+  // university's students — correct the flag on every read so it can
+  // never re-enter the 可报名 list by any path.
+  const base =
+    isAlreadyAwardedReport(it) && it.needsApplication ? { ...it, needsApplication: false } : it;
   if (it.url !== WFYI_SCHOLARSHIP_URL && it.readUrl !== WFYI_SCHOLARSHIP_URL) {
-    return blockedReason === it.blockedReason ? it : { ...it, blockedReason };
+    return blockedReason === it.blockedReason ? base : { ...base, blockedReason };
   }
   return {
-    ...it,
+    ...base,
     blockedReason: blockedReason ?? "Amazon CloudFront 配置为屏蔽中国访问",
     officialUrl: "https://www.investedindiana.org/success-scholarship/",
     summaryZh:
@@ -6117,7 +6224,7 @@ export const Actions = {
 
   getLearning: defineAction({
     description:
-      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生； since 2026-11-23 the stage signals — middle school(s), 中小学， 初中， 高中生， 中六， JUPAS, DSE, 研究生/硕士研究生 — are matched against title + summary + points + audienceStage together, so an item whose stage is stated only in its body, e.g. an HKU undergraduate item naming JUPAS/中六 in its points, is excluded too), pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships), activity write-ups whose summary dates the event in the past (\"X月X日……举行/举办/召开\" with no replay and no sign-up, e.g. the 东湖大咖公开课 report), 专硕/学硕 master's-stage items (e.g. the 专硕 dorm-policy news), scholarships limited to one local school district's students or to high-school students only (school district / juniors and seniors / high school football / high school athlete / 学区 / 高中生， e.g. the St. Joseph scholarship and the People high-school athlete scholarship story) and expired intakes are all filtered out, so the list may honestly be empty. HTML entities (&#…; and &…;, incl. double-encoded forms) are decoded in titles, points and summaries at ingest and on every read (2026-11-23), and an unenriched item's summary/relevance line is rebuilt from complete sentences of its own source summary — never cut mid-sentence and never a fabricated translation. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip. Since 2026-11-23 the list is split into two display groups via each item's group field: seven hand-verified free resources that can be started right now (CURATED_LEARNING_ANYTIME — 网络安全/英语公开课， authorised CTF practice, a Cambridge lecture recording; each with a startHint naming the first lesson or exercise) lead the items array as group=anytime, followed by pool courses/resources (also anytime); pool opportunities with a deadline in the next 30 days and a confirmed official entry are group=upcoming （近期可报名）; other opportunities keep group=null. The curated 近期可报名 set is empty this round — no official page was verified as explicitly open and free — so that group may honestly show its empty state. 自 2026-11-23 起，池内条目只有含真实可学内容（课程/讲座/回放/练习/实验）才进随时可学；纯政策新闻（征求意见稿、管理条例/办法类通知，如《教材管理条例（征求意见稿）》）由学习栏规则滤掉，永不为 group=anytime。自 2026-11-23 起另有 7 门人工核实的免费中文 AI 课程（CURATED_LEARNING_AI）作为持久精选随随时可学一同返回，每门带 aiTopic=true 供客户端的「AI 学习」话题筛选使用（能学什么/需要什么基础/从哪一课开始都写在卡上；全部免费学习、需免费注册、仅认证证书付费）；池内条目永不带 aiTopic，所以 Coursera 博客《Introducing AI Series on Coursera》（背后是 Coursera Plus 付费订阅、无单门免费带中文字幕课程、面向在职人士）保留其随时可学池内位置但不进 AI 筛选，吴恩达《AI for Everyone》因只有非官方搬运、正版免费旁听与中文字幕未核实而不收录。",
+      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生； since 2026-11-23 the stage signals — middle school(s), 中小学， 初中， 高中生， 中六， JUPAS, DSE, 研究生/硕士研究生 — are matched against title + summary + points + audienceStage together, so an item whose stage is stated only in its body, e.g. an HKU undergraduate item naming JUPAS/中六 in its points, is excluded too), pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships), activity write-ups whose summary dates the event in the past (\"X月X日……举行/举办/召开\" with no replay and no sign-up, e.g. the 东湖大咖公开课 report), 专硕/学硕 master's-stage items (e.g. the 专硕 dorm-policy news), scholarships limited to one local school district's students or to high-school students only (school district / juniors and seniors / high school football / high school athlete / 学区 / 高中生， e.g. the St. Joseph scholarship and the People high-school athlete scholarship story) and expired intakes are all filtered out, so the list may honestly be empty. 自 2026-11-23 起另有两条规则：只有宣传博客、限时试听或无法核实免费范围的内容不进学习栏（课程卡必须直接链接到可免费学习的具体课程、练习或讲座回放；免费注册、仅证书收费的课程保留）；已发放/已颁发类报道不进可报名列表且 needsApplication 纠正为 false，只有官方页面确认报名已开放、报名免费且申请范围包含中国专科在读生时才列入，官方明确滚动报名或常年开放的项目即使没有截止日期也可保留。 HTML entities (&#…; and &…;, incl. double-encoded forms) are decoded in titles, points and summaries at ingest and on every read (2026-11-23), and an unenriched item's summary/relevance line is rebuilt from complete sentences of its own source summary — never cut mid-sentence and never a fabricated translation. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip. Since 2026-11-23 the list is split into two display groups via each item's group field: seven hand-verified free resources that can be started right now (CURATED_LEARNING_ANYTIME — 网络安全/英语公开课， authorised CTF practice, a Cambridge lecture recording; each with a startHint naming the first lesson or exercise) lead the items array as group=anytime, followed by pool courses/resources (also anytime); pool opportunities with a deadline in the next 30 days and a confirmed official entry are group=upcoming （近期可报名）; other opportunities keep group=null. The curated 近期可报名 set is empty this round — no official page was verified as explicitly open and free — so that group may honestly show its empty state. 自 2026-11-23 起，池内条目只有含真实可学内容（课程/讲座/回放/练习/实验）才进随时可学；纯政策新闻（征求意见稿、管理条例/办法类通知，如《教材管理条例（征求意见稿）》）由学习栏规则滤掉，永不为 group=anytime。自 2026-11-23 起另有 7 门人工核实的免费中文 AI 课程（CURATED_LEARNING_AI）作为持久精选随随时可学一同返回，每门带 aiTopic=true 供客户端的「AI 学习」话题筛选使用（能学什么/需要什么基础/从哪一课开始都写在卡上；全部免费学习、需免费注册、仅认证证书付费）；池内条目永不带 aiTopic。自 2026-11-23 起，Coursera 博客《Introducing AI Series on Coursera》（背后是 Coursera Plus 付费订阅、无单门免费带中文字幕课程、面向在职人士）由宣传博客规则从学习栏整个移除，不再保留随时可学位置；吴恩达《AI for Everyone》因只有非官方搬运、正版免费旁听与中文字幕未核实而不收录。",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
