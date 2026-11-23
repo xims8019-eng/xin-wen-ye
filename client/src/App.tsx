@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type ApiResponse } from "./api";
 
+
 type NewsItem = ApiResponse<typeof api, "getCategoryNews">["items"][number];
 type LearningItem = ApiResponse<typeof api, "getLearning">["items"][number];
 type LearningCategory = LearningItem["category"];
@@ -298,7 +299,6 @@ function ArticleRow({ item, relevance }: { item: NewsItem; relevance?: string })
   );
 }
 
-
 function LearningRow({ item }: { item: LearningItem }) {
   const [open, setOpen] = useState(false);
   const catLabel = LEARNING_CATEGORIES.find((c) => c.id === item.category)?.label ?? "";
@@ -319,6 +319,12 @@ function LearningRow({ item }: { item: LearningItem }) {
             <span className="font-medium text-[var(--text)]">和我有什么关系：</span>
             {item.relevance}
           </p>
+          {item.startHint ? (
+            <p className="mt-1 text-sm leading-relaxed text-[var(--dim)]">
+              <span className="font-medium text-[var(--text)]">从哪开始：</span>
+              {item.startHint}
+            </p>
+          ) : null}
           <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-[var(--dim)]">
             <span className="rounded-full border border-[var(--border)] px-2 py-0.5 font-medium text-[var(--text)]">{catLabel}</span>
             {!item.titleOnly && item.enrichState === "new" ? (
@@ -465,7 +471,6 @@ function DeadlineAlerts({ deadlines }: { deadlines: LearningItem[] }) {
 }
 
 function LearningSection({ onGoLearning }: { onGoLearning: () => void }) {
-  const [cat, setCat] = useState<LearningCategory>("courses");
   const queryClient = useQueryClient();
   const learning = useQuery({ queryKey: ["learning"], queryFn: () => api.getLearning({ force: false }) });
   const refresh = useMutation({
@@ -476,7 +481,10 @@ function LearningSection({ onGoLearning }: { onGoLearning: () => void }) {
     },
     onError: () => {},
   });
-  const items = (learning.data?.items ?? []).filter((it) => it.category === cat).slice(0, 6);
+  const allItems = learning.data?.items ?? [];
+  const anytime = allItems.filter((it) => it.group === "anytime");
+  const upcoming = allItems.filter((it) => it.group === "upcoming");
+  const others = allItems.filter((it) => it.group !== "anytime" && it.group !== "upcoming");
 
   return (
     <section aria-label="学习栏目" className="mt-10 border-t-2 border-[var(--text)] pt-5">
@@ -503,33 +511,48 @@ function LearningSection({ onGoLearning }: { onGoLearning: () => void }) {
         <DeadlineAlerts deadlines={learning.data?.deadlines ?? []} />
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-2" role="tablist" aria-label="学习分类">
-        {LEARNING_CATEGORIES.map((c) => (
-          <button
-            key={c.id}
-            type="button"
-            role="tab"
-            aria-selected={cat === c.id}
-            onClick={() => setCat(c.id)}
-            className={`rounded-full px-3.5 text-sm ${
-              cat === c.id ? "bg-[var(--accent)] font-semibold text-white" : "border border-[var(--border)] text-[var(--text)]"
-            }`}
-          >
-            {c.label}
-          </button>
-        ))}
-      </div>
-
       {learning.isPending ? (
         <p className="py-8 text-sm text-[var(--dim)]">正在取学习资讯…</p>
-      ) : items.length === 0 ? (
-        <p className="py-8 text-sm text-[var(--dim)]">这一类暂时没取到新内容，点刷新再试，或看看其他两类。</p>
       ) : (
-        <ul>
-          {items.map((item) => (
-            <LearningRow key={item.url} item={item} />
-          ))}
-        </ul>
+        <>
+          <div className="mt-5">
+            <h4 className="font-headline text-base font-bold text-[var(--text)]">随时可学</h4>
+            <p className="mt-0.5 text-xs text-[var(--dim)]">现在就能开始的免费课程、练习与讲座回放，精选在前。</p>
+            {anytime.length === 0 ? (
+              <p className="py-4 text-sm text-[var(--dim)]">暂时没取到可直接开始的学习资源，点刷新再试。</p>
+            ) : (
+              <ul>
+                {anytime.map((item) => (
+                  <LearningRow key={item.url} item={item} />
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="mt-6">
+            <h4 className="font-headline text-base font-bold text-[var(--text)]">近期可报名</h4>
+            {upcoming.length === 0 ? (
+              <p className="mt-1 py-2 text-sm text-[var(--dim)]">
+                暂无符合条件的活动——官方明确开放报名且免费的课程或讲座出现时会显示在这里。
+              </p>
+            ) : (
+              <ul>
+                {upcoming.map((item) => (
+                  <LearningRow key={item.url} item={item} />
+                ))}
+              </ul>
+            )}
+          </div>
+          {others.length > 0 ? (
+            <div className="mt-6">
+              <h4 className="font-headline text-sm font-bold text-[var(--dim)]">其他学习机会</h4>
+              <ul>
+                {others.map((item) => (
+                  <LearningRow key={item.url} item={item} />
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </>
       )}
       <button type="button" onClick={onGoLearning} className="mt-4 text-sm font-medium text-[var(--accent)]">
         查看全部学习资讯 →
@@ -550,6 +573,9 @@ function LearningView() {
     onError: () => {},
   });
   const items = learning.data?.items ?? [];
+  const anytime = items.filter((it) => it.group === "anytime");
+  const upcoming = items.filter((it) => it.group === "upcoming");
+  const others = items.filter((it) => it.group !== "anytime" && it.group !== "upcoming");
 
   return (
     <section>
@@ -579,20 +605,45 @@ function LearningView() {
       ) : items.length === 0 ? (
         <p className="py-8 text-sm text-[var(--dim)]">暂时没取到学习资讯，点刷新再试。</p>
       ) : (
-        LEARNING_CATEGORIES.map((c) => {
-          const group = items.filter((it) => it.category === c.id);
-          if (group.length === 0) return null;
-          return (
-            <div key={c.id} className="mt-8">
-              <h4 className="font-headline border-b-2 border-[var(--text)] pb-2 text-lg font-black text-[var(--text)]">{c.label}</h4>
+        <>
+          <div className="mt-8">
+            <h4 className="font-headline border-b-2 border-[var(--text)] pb-2 text-lg font-black text-[var(--text)]">随时可学</h4>
+            <p className="mt-1 text-xs text-[var(--dim)]">现在就能开始的免费课程、练习与讲座回放，精选在前；每条都写了打开后从哪一课或哪项练习开始。</p>
+            {anytime.length === 0 ? (
+              <p className="py-4 text-sm text-[var(--dim)]">暂时没取到可直接开始的学习资源，点刷新再试。</p>
+            ) : (
               <ul>
-                {group.map((item) => (
+                {anytime.map((item) => (
+                  <LearningRow key={item.url} item={item} />
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="mt-8">
+            <h4 className="font-headline border-b-2 border-[var(--text)] pb-2 text-lg font-black text-[var(--text)]">近期可报名</h4>
+            {upcoming.length === 0 ? (
+              <p className="mt-1 py-2 text-sm text-[var(--dim)]">
+                暂无符合条件的活动——官方明确开放报名且免费的课程或讲座出现时会显示在这里。
+              </p>
+            ) : (
+              <ul>
+                {upcoming.map((item) => (
+                  <LearningRow key={item.url} item={item} />
+                ))}
+              </ul>
+            )}
+          </div>
+          {others.length > 0 ? (
+            <div className="mt-8">
+              <h4 className="font-headline text-sm font-bold text-[var(--dim)]">其他学习机会</h4>
+              <ul>
+                {others.map((item) => (
                   <LearningRow key={item.url} item={item} />
                 ))}
               </ul>
             </div>
-          );
-        })
+          ) : null}
+        </>
       )}
     </section>
   );
@@ -613,6 +664,9 @@ function JiangxiRow({ item }: { item: JiangxiItem }) {
         {item.summaryZh ? <p className="mt-1 text-sm leading-relaxed text-[var(--dim)]">{item.summaryZh}</p> : null}
         <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-[var(--dim)]">
           <span className="rounded-full border border-[var(--border)] px-2 py-0.5 font-medium text-[var(--text)]">{item.tag}</span>
+          {item.docKind ? (
+            <span className="rounded-full bg-[var(--space-surface-alt)] px-2 py-0.5 font-medium text-[var(--text)]">{item.docKind}</span>
+          ) : null}
           <span className="rounded-full bg-[var(--space-surface-alt)] px-2 py-0.5 text-[var(--text)]">
             适用年份：{item.applicableYear ?? "未注明"}
           </span>
@@ -664,7 +718,12 @@ function JiangxiRow({ item }: { item: JiangxiItem }) {
             </>
           ) : null}
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            {item.readUrl ? <ViewOriginalButton url={item.readUrl} /> : <CopyTitleButton title={item.title} />}
+            {item.readUrl ? (
+              <ViewOriginalButton url={item.readUrl} label="查看通知页" />
+            ) : (
+              <CopyTitleButton title={item.title} />
+            )}
+            {item.attachmentUrl ? <ViewOriginalButton url={item.attachmentUrl} label="官方附件" /> : null}
             {item.needsLogin ? <LoginNote /> : null}
           </div>
         </div>
@@ -722,6 +781,19 @@ function JiangxiSection() {
             </li>
           ))}
         </ul>
+      ) : null}
+      {(q.data?.archive ?? []).length > 0 ? (
+        <div className="mt-5">
+          <h4 className="font-headline text-base font-bold text-[var(--text)]">往年官方备考资料</h4>
+          <p className="mt-1 text-xs leading-relaxed text-[var(--dim)]">
+            官方真题：经核查，考试院与教育厅官网未公开 2026 年专升本真题；《考试说明》中也没有例题、样题。备考以《考试说明》的考试范围、题型与参考书目为准。
+          </p>
+          <ul>
+            {(q.data?.archive ?? []).map((item) => (
+              <JiangxiRow key={item.url} item={item} />
+            ))}
+          </ul>
+        </div>
       ) : null}
       {q.isPending ? (
         <p className="py-6 text-sm text-[var(--dim)]">正在取专升本通知…</p>

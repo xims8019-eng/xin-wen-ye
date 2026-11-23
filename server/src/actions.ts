@@ -1168,6 +1168,10 @@ interface LearningItem {
    * one or from the original text.
    */
   enrichState: "new" | "stored" | "original";
+  /** Curated anytime resources only: the first lesson/practice to start with. */
+  startHint?: string | null;
+  /** Display group assigned at read time in getLearning; absent on stored pool items. */
+  group?: "anytime" | "upcoming" | null;
 }
 
 const LEARNING_TTL_MS = 45 * 60 * 1000;
@@ -1235,6 +1239,32 @@ interface EnrichEntry {
   deadline: string | null;
   fee: string | null;
   needsApplication: boolean;
+}
+
+/**
+ * Pure policy news carrying no learnable content (user, 2026-11-23):
+ * a regulation / measure notice （征求意见稿， 管理条例/办法/规定/细则 in
+ * the TITLE — the regulation markers are title-only) whose title +
+ * summary + points carry NO learnable signal （课程/公开课/讲座/回放/
+ * 练习/实验/题库/CTF/慕课/训练营/学习计划/系列课/教学视频/课堂/免费
+ * 开放， or a 教材 that is itself free / downloadable / openly
+ * accessible). A bare 教材 does NOT count as learnable: a 条例 about
+ * textbooks is a rule ABOUT teaching materials, not a resource the user
+ * can learn from (the named case is 《教材管理条例（征求意见稿）》，
+ * which slipped into 随时可学 only because the actionable-title regex
+ * matched its bare 教材）. A regulation explainer that does carry a
+ * lecture / open-class / replay signal is not misclassified.
+ */
+function isPolicyNewsWithoutLearnableContent(item: {
+  title: string;
+  summaryZh?: string | null;
+  points?: string[];
+}): boolean {
+  const text = `${item.title} ${item.summaryZh ?? ""} ${(item.points ?? []).join(" ")}`;
+  return (
+    /征求意见稿|管理条例|管理办法|实施办法|管理规定|暂行办法|实施细则|试行办法/.test(item.title) &&
+    !/课程|公开课|讲座|回放|回看|练习|实验|实训|题库|CTF|慕课|训练营|学习计划|系列课|教学视频|课堂|免费开放|教材[^。]{0,6}(免费|下载|开放获取)/.test(text)
+  );
 }
 
 /**
@@ -1450,6 +1480,12 @@ function isLearningNotActionable(
   // no student-facing sign-up, contest or course in the title → out (the
   // GET2026 ClassIn AI 教培生态论坛 is the shape this removes).
   if (/(论坛|峰会)/.test(t) && !/(学生|竞赛|大赛|报名|课程|讲座|公开课)/.test(t)) return true;
+  // Pure policy news with no learnable content (user, 2026-11-23): a
+  // 征求意见稿 / 管理条例·办法 notice is a rule, not a resource — out,
+  // even when its title's bare 教材 would otherwise read as an
+  // actionable signal below. Shared by ingest, every getLearning read
+  // and the getDailyDigest learning loop via this one function.
+  if (isPolicyNewsWithoutLearnableContent(item)) return true;
   // No actionable signal at all → a pure news report, an advice essay or
   // a product/company story (the UN climate report, the AI-interviewer
   // news, the MIT program write-ups, the Workday integration story).
@@ -2005,6 +2041,10 @@ interface JiangxiItem {
   noticeKind: JiangxiNoticeKind;
   /** Whether 信息安全技术应用 can apply — set ONLY when a formal 专业对照 basis in the source names the major; otherwise null (never guessed). */
   canApplyMajor: boolean | null;
+  /** Official attachment URL (curated archive items only). */
+  attachmentUrl?: string | null;
+  /** Document kind badge (curated archive items only). */
+  docKind?: "真题" | "大纲样题" | "大纲" | "目录" | "通知" | null;
 }
 
 type JiangxiNoticeKind = "formal2028" | "reference" | "unconfirmed";
@@ -4304,6 +4344,10 @@ const learningItemSchema = z.object({
   needsApplication: z.boolean(),
   relevance: z.string(),
   enrichState: z.enum(["new", "stored", "original"]).catch("original"),
+  /** For curated anytime resources: the first lesson/practice to start with (2026-11-23). */
+  startHint: z.string().nullable().default(null),
+  /** Display group: anytime （随时可学） / upcoming （近期可报名）; null = other opportunity (2026-11-23). */
+  group: z.enum(["anytime", "upcoming"]).nullable().default(null),
 });
 
 const jiangxiItemSchema = z.object({
@@ -4325,7 +4369,377 @@ const jiangxiItemSchema = z.object({
   repost: z.boolean(),
   noticeKind: z.enum(["formal2028", "reference", "unconfirmed"]),
   canApplyMajor: z.boolean().nullable(),
+  /** Official attachment (PDF/docx) URL for archive items, alongside the notice page (2026-11-23). */
+  attachmentUrl: z.string().nullable().default(null),
+  /** Document kind badge for archive items （真题/大纲样题/大纲/目录/通知） (2026-11-23). */
+  docKind: z.enum(["真题", "大纲样题", "大纲", "目录", "通知"]).nullable().default(null),
 });
+
+// ---------------------------------------------------------------------------
+// 江西「往年官方备考资料」(2026-11-23): hand-verified official archive for
+// the most recent exam year with formal documents (2026). Every URL was
+// opened and checked by the researcher (browser.open / curl); the 教育厅
+// domain is jyt.jiangxi.gov.cn (the old jxedu.gov.cn no longer resolves).
+// The 2026 unified exam was held on 2026-03-29 (NOT April) and the score
+// lines were published 2026-04-18. Verified honest gap: neither jxeea.cn
+// nor jyt.jiangxi.gov.cn publishes 2026 专升本 真题, and the 《考试说明》
+// contains no 例题/样题 either — the client shows that as a static note;
+// no 真题 entry is fabricated here. The 对照 conclusion is written into
+// the item body, NOT the canApplyMajor badge, because the 目录 table
+// itself only goes down to "51 电子与信息大类" and never prints the
+// major name 信息安全技术应用 verbatim.
+// ---------------------------------------------------------------------------
+
+type JiangxiArchiveItem = z.infer<typeof jiangxiItemSchema>;
+
+const JIANGXI_ARCHIVE_ITEMS: JiangxiArchiveItem[] = [
+  {
+    title: "关于做好江西省2026年普通高校专升本考试报名工作的通知",
+    url: "http://www.jxeea.cn/jxsjyksy/tzgg14/content/content_2003741286481268736.html",
+    readUrl: "http://www.jxeea.cn/jxsjyksy/tzgg14/content/content_2003741286481268736.html",
+    source: "江西省教育考试院",
+    publishedAt: "2025-12-24",
+    tag: "报名",
+    docKind: "通知",
+    attachmentUrl: null,
+    summaryZh:
+      "2026 年专升本报名通知：江西省普通高校高职（专科）应届毕业生及符合条件的退役大学生士兵报名，网上报名 2026 年 1 月 6 日 9:00 至 11 日 17:00，报名费 130 元/人，分 9 大类按专业对照目录填报志愿。",
+    points: [
+      "报名条件：江西省 2026 年普通高校高职（专科）应届毕业生（2026 年 7 月 31 日前可取得毕业证，在校期间无记过及以上处分或报名前已解除）及符合条件的退役大学生士兵。",
+      "网上报名：2026 年 1 月 6 日 9:00—11 日 17:00，登录考试院网站“专升本管理系统”。",
+      "分 9 大类填报志愿，依据高职（专科）毕业专业对照《江西省2026年普通高校专升本考试对应专业（类）指导目录》选报；报名费 130 元/人，于志愿填报期间缴纳。",
+      "本通知无独立附件文件，报名条件与流程均为正文内容。",
+    ],
+    relevance:
+      "这是 2026 年江西专升本报名条件与流程的官方通知原文，关系到你 2028 年报名前核对自己是否符合报考条件、熟悉报名步骤与时间节奏。",
+    actionNeeded: "现在只需了解往年报名条件与流程，2028 年的正式报名通知出来后再按新通知办。",
+    titleOnly: false,
+    needsLogin: false,
+    isReference: true,
+    official: true,
+    repost: false,
+    noticeKind: "reference",
+    applicableYear: "2026年",
+    canApplyMajor: null,
+  },
+  {
+    title: "江西省2026年普通高等学校专升本考试各科目考试说明",
+    url: "http://jyt.jiangxi.gov.cn/jxjyw/tzgg785/content/content_2005943874253492224.html",
+    readUrl: "http://jyt.jiangxi.gov.cn/jxjyw/tzgg785/content/content_2005943874253492224.html",
+    source: "江西省教育厅",
+    publishedAt: "2025-12-30",
+    tag: "考试科目",
+    docKind: "大纲",
+    attachmentUrl: "http://jyt.jiangxi.gov.cn/jxjyw/tzgg785/2005943874253492224/EWHDl1ln.pdf",
+    summaryZh:
+      "2026 年专升本全部 12 个科目的考试说明合订本：公共基础课政治+英语+信息技术合卷（300 分/150 分钟），专业基础课 150 分/120 分钟；信息安全技术应用对应理工类，专业基础课为《高等数学及其应用》（说明第 83–88 页）。",
+    points: [
+      "公共基础课：政治+英语+信息技术合卷，300 分/150 分钟；专业基础课：150 分/120 分钟。",
+      "理工类专业基础课为《高等数学及其应用》，在本说明第 83–88 页：函数、极限、连续、一元函数微分学及其应用、一元函数积分学及其应用、常微分方程、多元函数微分学及其应用、二重积分及其应用；题型为单项选择题、填空题、计算题、解答题、应用题。",
+      "本说明 12 个科目均只有考试内容与要求、考试形式与题型、参考书目三部分，无例题、样题、样卷。",
+      "考试院 2025-12-31 转发：http://www.jxeea.cn/jxsjyksy/tzgg14/content/content_2007652411455311872.html",
+    ],
+    relevance:
+      "这是 2026 年全部 12 科的官方考试大纲，关系到你备考要复习哪些科目、每科考什么范围与题型；理工类看《高等数学及其应用》第 83–88 页。",
+    actionNeeded: "按这份说明规划复习：公共课政治、英语、信息技术合卷，专业课高等数学；2028 年以当年新版说明为准。",
+    titleOnly: false,
+    needsLogin: false,
+    isReference: true,
+    official: true,
+    repost: false,
+    noticeKind: "reference",
+    applicableYear: "2026年",
+    canApplyMajor: null,
+  },
+  {
+    title: "江西省2026年普通高等学校专升本考试对应专业（类）指导目录",
+    url: "http://jyt.jiangxi.gov.cn/jxjyw/tzgg785/content/content_2001500515568979968.html",
+    readUrl: "http://jyt.jiangxi.gov.cn/jxjyw/tzgg785/content/content_2001500515568979968.html",
+    source: "江西省教育厅",
+    publishedAt: "2025-12-18",
+    tag: "专业对照",
+    docKind: "目录",
+    attachmentUrl: "http://jyt.jiangxi.gov.cn/jxjyw/tzgg785/2001500515568979968/7Ul8fxAy.docx",
+    summaryZh:
+      "2026 年专升本专业对照目录（《实施方案》附件 5）：信息安全技术应用（510203）属 51 电子与信息大类，对应理工类（序号 5），专业基础课为《高等数学及其应用》，可报本科方向为 0809 计算机类普通本科与 3102 计算机类职业本科。",
+    points: [
+      "位置：指导目录第 2–3 页、序号 5 理工类；“0809 计算机类、3102 计算机类（职业本科）”一行对应高职（专科）专业（类）栏写有“51 电子与信息大类”。",
+      "报考类别：理工类（序号 5），不可跨类；公共基础课政治+英语+信息技术合卷（300 分）；专业基础课《高等数学及其应用》（150 分，见考试说明第 83–88 页）。",
+      "可报本科方向（该行）：0809 计算机类普通本科（如计算机科学与技术、信息安全）、3102 计算机类职业本科；具体某本科专业当年是否招生、以各校招生简章为准。",
+      "诚实说明：目录表内没有逐字出现“信息安全技术应用”这个专业名称，表只到“51 电子与信息大类”这一级；“510203 属 51 大类”一步来自国家《职业教育专业目录》体系，非目录原文。附件 docx 经核实可下载（HTTP 200、docx、约 556KB），表格内容经景德镇艺术职业大学官网转载同名文件与江西警察学院 2026 年招生简章交叉核对一致。",
+    ],
+    relevance:
+      "专业对照决定信息安全技术应用能报考哪个本科专业——这是 2026 年的官方目录，理工类序号 5 的 0809/3102 计算机类一行对应 51 电子与信息大类，与你能不能报、报哪个专业直接相关。",
+    actionNeeded:
+      "确认自己在理工类、专业课考高等数学；2028 年对照目录重新发布后按当年版本复核“51 电子与信息大类”是否仍对应理工类。",
+    titleOnly: false,
+    needsLogin: false,
+    isReference: true,
+    official: true,
+    repost: false,
+    noticeKind: "reference",
+    applicableYear: "2026年",
+    canApplyMajor: null,
+  },
+  {
+    title: "江西省2026年普通高校专升本录取控制分数线及网上录取安排",
+    url: "http://www.jxeea.cn/jxsjyksy/tzgg14/content/content_2046062825781657600.html",
+    readUrl: "http://www.jxeea.cn/jxsjyksy/tzgg14/content/content_2046062825781657600.html",
+    source: "江西省教育考试院",
+    publishedAt: "2026-04-18",
+    tag: "录取",
+    docKind: "通知",
+    attachmentUrl: null,
+    summaryZh:
+      "2026 年专升本录取控制分数线（总分 450 分）：理工类 214 分；文史哲类 325、经济类 214、法学类 279、教育类 291、农医药类 328、医学类 332、管理类 283、艺术类 236；征集志愿降分录取时各大类均不得低于 180 分。",
+    points: [
+      "2026 年统一考试于 3 月 29 日举行（公共基础课 9:00—11:30，专业基础课 15:00—17:00）；分数线 2026 年 4 月 18 日公布。",
+      "理工类 214 分（总分 450）；文史哲类 325、经济类 214、法学类 279、教育类 291、农医药类 328、医学类 332、管理类 283、艺术类 236。",
+      "征集志愿降分录取时，各大类均不得低于 180 分。",
+      "本通知无独立附件文件，分数线表为正文内容；第三方转载数字与官网不符的，以官网为准。",
+    ],
+    relevance:
+      "这是 2026 年江西专升本录取分数线的官方通知，理工类 214 分，关系到你给 2028 年定目标分数时参考的往年录取门槛。",
+    actionNeeded: "以理工类 214 分为往年参考定目标，2028 年分数线以当年公布为准。",
+    titleOnly: false,
+    needsLogin: false,
+    isReference: true,
+    official: true,
+    repost: false,
+    noticeKind: "reference",
+    applicableYear: "2026年",
+    canApplyMajor: null,
+  },
+  {
+    title: "关于做好全省2026年普通高校专升本考试招生工作的通知",
+    url: "http://www.jxeea.cn/jxsjyksy/tzgg14/content/content_2017128634308890624.html",
+    readUrl: "http://www.jxeea.cn/jxsjyksy/tzgg14/content/content_2017128634308890624.html",
+    source: "江西省教育厅",
+    publishedAt: "2026-01-27",
+    tag: "招生简章",
+    docKind: "通知",
+    attachmentUrl: null,
+    summaryZh:
+      "2026 年专升本考试招生工作通知：统一考试 2026 年 3 月 29 日，志愿填报 3 月 6 日 9:00 至 9 日 17:00，成绩 4 月 14 日后可查；9 类与专业基础课对应表中理工类对应《高等数学及其应用》。",
+    points: [
+      "统一考试 2026 年 3 月 29 日：公共基础课 9:00—11:30，专业基础课 15:00—17:00。",
+      "志愿填报 3 月 6 日 9:00—9 日 17:00；成绩 4 月 14 日后可查。",
+      "9 类与专业基础课对应：文史哲—大学语文及应用文写作、经济—经济学基础与应用、法学—法律基础与法律实务、教育—教育学及教学设计、理工—高等数学及其应用、农医药—化学基础与分析检验、医学—人体解剖学、管理—管理学原理及应用、艺术—艺术概论与欣赏。",
+    ],
+    relevance:
+      "这是 2026 年专升本考试招生工作的官方通知，关系到你了解往年考试时间、志愿填报节奏和 9 类对应的专业基础课。",
+    actionNeeded: "了解往年时间节奏即可，2028 年以当年通知为准。",
+    titleOnly: false,
+    needsLogin: false,
+    isReference: true,
+    official: true,
+    repost: false,
+    noticeKind: "reference",
+    applicableYear: "2026年",
+    canApplyMajor: null,
+  },
+];
+
+// ---------------------------------------------------------------------------
+// 学习栏「随时可学」精选 (2026-11-23): hand-verified free resources a
+// 专科在读生 can start right now — 网络安全/英语公开课， authorised CTF
+// practice and a university lecture recording. Every URL was opened and
+// checked by the researcher; each carries a startHint naming the first
+// lesson or exercise. publishedAt is null: these are standing resources,
+// not news. 「近期可报名」 has NO curated entries this round — the check
+// found no official page explicitly open for free registration, so that
+// group honestly stays empty (pool items can still land there via the
+// deadlines rule in getLearning).
+// ---------------------------------------------------------------------------
+
+type CuratedLearningItem = z.infer<typeof learningItemSchema>;
+
+const CURATED_LEARNING_ANYTIME: CuratedLearningItem[] = [
+  {
+    title: "网络安全-应用技术与工程实践（北京理工大学）",
+    url: "https://higher.smartedu.cn/course/66a033b5711dc30c34ab8067",
+    readUrl: "https://higher.smartedu.cn/course/66a033b5711dc30c34ab8067",
+    officialUrl: "https://higher.smartedu.cn/course/66a033b5711dc30c34ab8067",
+    source: "学堂在线 / 北京理工大学（国家高等教育智慧教育平台）",
+    publishedAt: null,
+    category: "courses",
+    summaryZh:
+      "零基础可学的网络安全公开课，北京理工大学开设，经国家高等教育智慧教育平台聚合；开课中，2026/07/23–2027/01/12；页面明写既适合相关专业学生，也适用于零基础和社会人士。",
+    points: [
+      "学习视频免费，需免费注册账号选课。",
+      "开课中：2026/07/23–2027/01/12；页面明写既适合相关专业学生，也适用于零基础和社会人士。",
+    ],
+    relevance: "适合零基础的专科在读生入门网络安全，能直接选课开始学，学网络空间安全的基础与工程实践。",
+    startHint: "从第 1 章 1.1《走进网络空间安全》开始",
+    fee: "免费",
+    needsApplication: false,
+    deadline: null,
+    needsLogin: false,
+    blockedReason: null,
+    chineseUrl: null,
+    titleOnly: false,
+    enrichState: "stored",
+    group: "anytime",
+    audienceStage: "专科在读",
+  },
+  {
+    title: "网络安全入门与实战（湖南铁道职业技术学院）",
+    url: "https://www.icourse163.org/course/HNRPC-1466016178",
+    readUrl: "https://www.icourse163.org/course/HNRPC-1466016178",
+    officialUrl: "https://www.icourse163.org/course/HNRPC-1466016178",
+    source: "中国大学MOOC / 湖南铁道职业技术学院",
+    publishedAt: null,
+    category: "courses",
+    summaryZh:
+      "最贴合专科的网络安全课，湖南铁道职业技术学院开设：14 个项目、33 个任务、74 个子任务，分基础、进阶、管理、实战四层；常见问题明写没有基础也能学会。",
+    points: [
+      "学习视频免费，需免费注册账号选课。",
+      "14 个项目、33 个任务、74 个子任务，分基础、进阶、管理、实战四层；学校课程页显示进行至第 2 周。",
+    ],
+    relevance: "适合没有基础的专科在读生，从项目实操入门网络安全，能直接选课开始学。",
+    startHint: "从模块 1“遵章办事，有的放矢——课程定位与基础”之 1.1《课程定位》开始",
+    fee: "免费",
+    needsApplication: false,
+    deadline: null,
+    needsLogin: false,
+    blockedReason: null,
+    chineseUrl: null,
+    titleOnly: false,
+    enrichState: "stored",
+    group: "anytime",
+    audienceStage: "专科在读",
+  },
+  {
+    title: "计算机系统与网络安全技术（电子科技大学）",
+    url: "https://www.icourse163.org/course/UESTC-235006?tid=272013",
+    readUrl: "https://www.icourse163.org/course/UESTC-235006?tid=272013",
+    officialUrl: "https://www.icourse163.org/course/UESTC-235006?tid=272013",
+    source: "中国大学MOOC / 电子科技大学",
+    publishedAt: null,
+    category: "courses",
+    summaryZh:
+      "理论进阶的网络安全课，电子科技大学周世杰教授开设；国家高等教育智慧教育平台镜像页显示开课中，2026/08/30–2026/12/27。",
+    points: ["学习视频免费，需免费注册账号选课。", "开课中：2026/08/30–2026/12/27。"],
+    relevance: "适合学完基础课后进阶理论的专科在读生，能直接选课开始学计算机系统与网络安全技术。",
+    startHint: "从第一章《信息安全概述》之“网络安全的定义”开始",
+    fee: "免费",
+    needsApplication: false,
+    deadline: null,
+    needsLogin: false,
+    blockedReason: null,
+    chineseUrl: null,
+    titleOnly: false,
+    enrichState: "stored",
+    group: "anytime",
+    audienceStage: "专科在读",
+  },
+  {
+    title: "大学英语（口语）（国防科技大学）",
+    url: "https://higher.smartedu.cn/course/6aeb9d2eb44e493c76486902",
+    readUrl: "https://higher.smartedu.cn/course/6aeb9d2eb44e493c76486902",
+    officialUrl: "https://higher.smartedu.cn/course/6aeb9d2eb44e493c76486902",
+    source: "中国大学MOOC / 国防科技大学（国家高等教育智慧教育平台）",
+    publishedAt: null,
+    category: "courses",
+    summaryZh:
+      "练口语和日常话题的大学英语公开课，国防科技大学刘源源开设；开课中，2026/10/22 起；100 万+人选课；适用对象为有一定英语基础、希望在口语单项上有所突破的学生。",
+    points: ["学习视频免费，需免费注册账号选课。", "开课中：2026/10/22 起；100 万+人选课。"],
+    relevance: "适合有一定英语基础、想练口语的专科在读生，能直接选课从日常话题开始练。",
+    startHint: "从 Week 1 Unit 1《Hometown》开始（接着是 Unit 2 Campus life）",
+    fee: "免费",
+    needsApplication: false,
+    deadline: null,
+    needsLogin: false,
+    blockedReason: null,
+    chineseUrl: null,
+    titleOnly: false,
+    enrichState: "stored",
+    group: "anytime",
+    audienceStage: "专科在读",
+  },
+  {
+    title: "CyLab Security Academy（原 picoCTF，美国卡内基梅隆大学）",
+    url: "https://cylabacademy.org/",
+    readUrl: "https://cylabacademy.org/",
+    officialUrl: "https://cylabacademy.org/",
+    source: "美国卡内基梅隆大学 CyLab",
+    publishedAt: null,
+    category: "resources",
+    summaryZh:
+      "免费的 CTF 练习平台，美国卡内基梅隆大学 CyLab 开设：500+ 挑战，General Skills 等 8 个方向；页面明写 Always free，每道题都是为被攻破而设计的，练习本身合法。",
+    points: [
+      "免费，需免费注册账号（邮箱验证）才能做题、记进度并使用网页版 Linux shell。",
+      "授权范围：只在平台指定的靶场内做题；入门指南 https://primer.cylabacademy.org/ 。",
+      "原站 https://picoctf.org/ 已迁移至此。",
+    ],
+    relevance: "适合想练 CTF 的专科在读生，在合法授权的平台靶场内做题，能直接注册开始练。",
+    startHint: "先读入门指南 Primer 的 2.3《Get a Shell》，完成 2.5.3《Shell Nav Exercise 1》，再进平台 General Skills 分类做入门题",
+    fee: "免费",
+    needsApplication: false,
+    deadline: null,
+    needsLogin: false,
+    blockedReason: null,
+    chineseUrl: null,
+    titleOnly: false,
+    enrichState: "stored",
+    group: "anytime",
+    audienceStage: "专科在读",
+  },
+  {
+    title: "OverTheWire：Bandit（面向纯新手的网络安全靶场）",
+    url: "https://overthewire.org/wargames/bandit/",
+    readUrl: "https://overthewire.org/wargames/bandit/",
+    officialUrl: "https://overthewire.org/wargames/bandit/",
+    source: "OverTheWire（志愿者社区）",
+    publishedAt: null,
+    category: "resources",
+    summaryZh:
+      "面向纯新手的免费网络安全靶场：无账号、无报名，用 SSH 直接连靶场做题；规则页明写平台免费向玩家提供这些资源。",
+    points: [
+      "免费，无需注册；用 SSH 直连靶场 bandit.labs.overthewire.org（端口 2220）。",
+      "授权范围：练习只在平台指定的 Bandit 服务器上做，不要把学到的手法用于其他未授权系统；规则页 https://overthewire.org/rules/ 。",
+    ],
+    relevance: "适合零基础想练 Linux 与网络安全基本功的专科在读生，无需注册，能直接连靶场开始。",
+    startHint: "从 Level 0 开始：用用户名和密码均为 bandit0 登录，读 home 目录里的 readme 文件，拿到进入 Level 1 的密码",
+    fee: "免费",
+    needsApplication: false,
+    deadline: null,
+    needsLogin: false,
+    blockedReason: null,
+    chineseUrl: null,
+    titleOnly: false,
+    enrichState: "stored",
+    group: "anytime",
+    audienceStage: "专科在读",
+  },
+  {
+    title: "剑桥大学计算机系《Security》课程录像（2020–21）",
+    url: "https://www.cl.cam.ac.uk/teaching/2021/Security/video/",
+    readUrl: "https://www.cl.cam.ac.uk/teaching/2021/Security/video/",
+    officialUrl: "https://www.cl.cam.ac.uk/teaching/2021/Security/video/",
+    source: "英国剑桥大学计算机科学与技术系",
+    publishedAt: null,
+    category: "courses",
+    summaryZh:
+      "剑桥大学计算机系《Security》课程录像（2020–21 学年），直接点 mp4 链接即可看或下载，无需注册；全英文、偏理论进阶。",
+    points: [
+      "免费，无需注册，直接点 mp4 链接即可看或下载。",
+      "全英文、偏理论进阶，适合在基础课之后看；不是中文讲座。",
+    ],
+    relevance: "适合学完基础课后想进阶理论的专科在读生，能直接点开录像看。",
+    startHint: "从“1 Introduction”（约 23 分钟）开始，接着是“2 Security targets”",
+    fee: "免费",
+    needsApplication: false,
+    deadline: null,
+    needsLogin: false,
+    blockedReason: null,
+    chineseUrl: null,
+    titleOnly: false,
+    enrichState: "stored",
+    group: "anytime",
+    audienceStage: "专科在读",
+  },
+];
 
 const overseasItemSchema = z.object({
   title: z.string(),
@@ -4756,6 +5170,8 @@ function normalizeLearning(it: LearningItem): z.infer<typeof learningItemSchema>
     // Chinese summary means an earlier enrichment ("stored"), otherwise
     // the item is showing its original text.
     enrichState: fixed.enrichState ?? (summaryZh ? "stored" : "original"),
+    startHint: fixed.startHint ?? null,
+    group: fixed.group ?? null,
   };
 }
 
@@ -5188,7 +5604,7 @@ export const Actions = {
 
   getLearning: defineAction({
     description:
-      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生； since 2026-11-23 the stage signals — middle school(s), 中小学， 初中， 高中生， 中六， JUPAS, DSE, 研究生/硕士研究生 — are matched against title + summary + points + audienceStage together, so an item whose stage is stated only in its body, e.g. an HKU undergraduate item naming JUPAS/中六 in its points, is excluded too), pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships), activity write-ups whose summary dates the event in the past (\"X月X日……举行/举办/召开\" with no replay and no sign-up, e.g. the 东湖大咖公开课 report), 专硕/学硕 master's-stage items (e.g. the 专硕 dorm-policy news), scholarships limited to one local school district's students or to high-school students only (school district / juniors and seniors / high school football / high school athlete / 学区 / 高中生， e.g. the St. Joseph scholarship and the People high-school athlete scholarship story) and expired intakes are all filtered out, so the list may honestly be empty. HTML entities (&#…; and &…;, incl. double-encoded forms) are decoded in titles, points and summaries at ingest and on every read (2026-11-23), and an unenriched item's summary/relevance line is rebuilt from complete sentences of its own source summary — never cut mid-sentence and never a fabricated translation. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip.",
+      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生； since 2026-11-23 the stage signals — middle school(s), 中小学， 初中， 高中生， 中六， JUPAS, DSE, 研究生/硕士研究生 — are matched against title + summary + points + audienceStage together, so an item whose stage is stated only in its body, e.g. an HKU undergraduate item naming JUPAS/中六 in its points, is excluded too), pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships), activity write-ups whose summary dates the event in the past (\"X月X日……举行/举办/召开\" with no replay and no sign-up, e.g. the 东湖大咖公开课 report), 专硕/学硕 master's-stage items (e.g. the 专硕 dorm-policy news), scholarships limited to one local school district's students or to high-school students only (school district / juniors and seniors / high school football / high school athlete / 学区 / 高中生， e.g. the St. Joseph scholarship and the People high-school athlete scholarship story) and expired intakes are all filtered out, so the list may honestly be empty. HTML entities (&#…; and &…;, incl. double-encoded forms) are decoded in titles, points and summaries at ingest and on every read (2026-11-23), and an unenriched item's summary/relevance line is rebuilt from complete sentences of its own source summary — never cut mid-sentence and never a fabricated translation. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip. Since 2026-11-23 the list is split into two display groups via each item's group field: seven hand-verified free resources that can be started right now (CURATED_LEARNING_ANYTIME — 网络安全/英语公开课， authorised CTF practice, a Cambridge lecture recording; each with a startHint naming the first lesson or exercise) lead the items array as group=anytime, followed by pool courses/resources (also anytime); pool opportunities with a deadline in the next 30 days and a confirmed official entry are group=upcoming （近期可报名）; other opportunities keep group=null. The curated 近期可报名 set is empty this round — no official page was verified as explicitly open and free — so that group may honestly show its empty state. 自 2026-11-23 起，池内条目只有含真实可学内容（课程/讲座/回放/练习/实验）才进随时可学；纯政策新闻（征求意见稿、管理条例/办法类通知，如《教材管理条例（征求意见稿）》）由学习栏规则滤掉，永不为 group=anytime。",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -5228,7 +5644,32 @@ export const Actions = {
             it.officialUrl !== "",
         )
         .sort((a, b) => (a.deadline ?? "").localeCompare(b.deadline ?? ""));
-      return { items, deadlines, asOf };
+      // Two display groups (2026-11-23): pool courses/resources are
+      // 随时可学 ("anytime"); pool opportunities whose deadline falls in
+      // the next 30 days with a confirmed official entry — exactly the
+      // deadlines list above — are 近期可报名 ("upcoming"); any other
+      // opportunity keeps group=null and is listed separately by the
+      // client, never silently dropped. The hand-verified curated
+      // anytime resources go FIRST and bypass normalizeLearning (its
+      // relevance rebuild would overwrite their curated lines) and the
+      // actionable filter above.
+      const upcomingUrls = new Set(deadlines.map((d) => d.url));
+      const grouped = items.map((it) => ({
+        ...it,
+        // Defense in depth (2026-11-23): a pool courses/resources item
+        // only becomes 随时可学 when it is not pure policy news without
+        // learnable content — the actionable filter above already drops
+        // those, and this guard keeps the grouping honest even if a
+        // cached item ever reaches here unfiltered. The curated anytime
+        // resources are prepended below and never pass through here.
+        group: ((it.category === "courses" || it.category === "resources") &&
+        !isPolicyNewsWithoutLearnableContent(it)
+          ? "anytime"
+          : upcomingUrls.has(it.url)
+            ? "upcoming"
+            : null) as "anytime" | "upcoming" | null,
+      }));
+      return { items: [...CURATED_LEARNING_ANYTIME, ...grouped], deadlines, asOf };
     },
   }),
 
@@ -5333,11 +5774,12 @@ export const Actions = {
 
   getJiangxi: defineAction({
     description:
-      "Returns the 江西专升本 column for a Jiangxi 专科 student （信息安全技术应用， 2028 年毕业）: official-first notices about 报名/考试科目/专业对照/招生简章， each with applicable year, relevance to the major and what to do. Training-institution marketing （机构评测/测评等） and 高考择校 content for gaokao students choosing a 专科 school are hidden at ingest — he is already a second-year student. Ended exam-administration reminders （考区/考点/考场提醒、准考证提示 whose sitting has passed, e.g. the 2026 九江考区温馨提醒） are moved to history — filtered at ingest AND on every read so cached payloads obey too — while lasting-value material （考试科目/专业对照/招生方案/实施方案/报名流程/分数线） stays visible. Past-year items are flagged isReference （备考参考）; the pending list marks each 2028 matter as 待公布 until a 2028 notice covers it. Tags are content-derived deterministically at ingest and on every read (2026-11-22): 分数线/录取控制线/投档线/录取结果 → 录取， 报名流程/报名通知/报考 → 报名， 考试时间/科目安排/准考证 → 考试科目 — a score-line announcement can never stay tagged 报名. A missing applicable year is derived from the title, then the summary, then the publish date, so dated past-year material always shows its year. Relevance lines are per-item, grounded in the item's own tag/title/year; the old shared template (or any relevance repeated verbatim across items) is replaced on every read. Within a tag the line follows the title's own content signal (2026-11-23): 报名条件/报考指南 vs 报名流程/详细报考步骤 get different lines, as do 分数线/录取控制线 vs 录取人数/录取结果 — and a final column-level pass guarantees no two items in the column carry the identical relevance sentence, appending a clause built from the item's own title phrase when a repeat survives. Official sources (jxeea.cn / .gov.cn / .edu.cn) sort first inside each group.",
+      "Returns the 江西专升本 column for a Jiangxi 专科 student （信息安全技术应用， 2028 年毕业）: official-first notices about 报名/考试科目/专业对照/招生简章， each with applicable year, relevance to the major and what to do. Training-institution marketing （机构评测/测评等） and 高考择校 content for gaokao students choosing a 专科 school are hidden at ingest — he is already a second-year student. Ended exam-administration reminders （考区/考点/考场提醒、准考证提示 whose sitting has passed, e.g. the 2026 九江考区温馨提醒） are moved to history — filtered at ingest AND on every read so cached payloads obey too — while lasting-value material （考试科目/专业对照/招生方案/实施方案/报名流程/分数线） stays visible. Past-year items are flagged isReference （备考参考）; the pending list marks each 2028 matter as 待公布 until a 2028 notice covers it. Tags are content-derived deterministically at ingest and on every read (2026-11-22): 分数线/录取控制线/投档线/录取结果 → 录取， 报名流程/报名通知/报考 → 报名， 考试时间/科目安排/准考证 → 考试科目 — a score-line announcement can never stay tagged 报名. A missing applicable year is derived from the title, then the summary, then the publish date, so dated past-year material always shows its year. Relevance lines are per-item, grounded in the item's own tag/title/year; the old shared template (or any relevance repeated verbatim across items) is replaced on every read. Within a tag the line follows the title's own content signal (2026-11-23): 报名条件/报考指南 vs 报名流程/详细报考步骤 get different lines, as do 分数线/录取控制线 vs 录取人数/录取结果 — and a final column-level pass guarantees no two items in the column carry the identical relevance sentence, appending a clause built from the item's own title phrase when a repeat survives. Official sources (jxeea.cn / .gov.cn / .edu.cn) sort first inside each group. Since 2026-11-23 the response also carries archive: five hand-verified 2026 official documents （往年官方备考资料 — 报名通知/考试说明/专业对照目录/录取控制分数线/考试招生工作通知， from jxeea.cn and jyt.jiangxi.gov.cn, each with docKind and, where one exists, an attachmentUrl next to the notice page). Verified: the 2026 exam was held 2026-03-29 and score lines published 2026-04-18; neither official site publishes 2026 真题 and the 考试说明 has no 例题/样题， so no 真题 item exists — the client states that honestly above the archive.",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
       items: z.array(jiangxiItemSchema),
+      archive: z.array(jiangxiItemSchema),
       pending: z.array(z.object({ label: z.string(), status: z.string() })),
       hasTodayUpdate: z.boolean(),
     }),
@@ -5359,7 +5801,25 @@ export const Actions = {
         { label: "2028 年专业对照表", status: covers("专业对照") ? "已有 2028 年消息，见下方" : "待公布" },
         { label: "2028 年招生简章", status: covers("招生简章") ? "已有 2028 年消息，见下方" : "待公布" },
       ];
-      return { items, pending, asOf, hasTodayUpdate: items.some((it) => isTodayShanghai(it.publishedAt)) };
+      // The hand-verified 2026 archive is returned verbatim in its own
+      // field (2026-11-23): it does NOT pass through fixJiangxiList or
+      // the ended-reminder filter, and it never counts toward the 2028
+      // pending covers() check above — the four 2028 items stay 待公布
+      // until a real 2028 notice appears in the fetched pool.
+      return {
+        // Pool items predate the archive fields: fill the schema
+        // defaults (null) at the response boundary only — the pool
+        // pipeline above is unchanged.
+        items: items.map((it) => ({
+          ...it,
+          attachmentUrl: it.attachmentUrl ?? null,
+          docKind: it.docKind ?? null,
+        })),
+        archive: JIANGXI_ARCHIVE_ITEMS,
+        pending,
+        asOf,
+        hasTodayUpdate: items.some((it) => isTodayShanghai(it.publishedAt)),
+      };
     },
   }),
 
