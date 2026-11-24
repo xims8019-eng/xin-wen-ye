@@ -1,0 +1,83 @@
+# 每日巡检：每天北京时间 08:25 左右（UTC 00:25）检查生产站。
+#
+# 只读：脚本先读 getStatus，再按各栏缓存的新鲜度决定是否调该栏的 get*；
+# 缓存过期时跳过该栏，绝不触发刷新或模型调用（见 scripts/check-news-page.mjs）。
+# 分别报告「网站可读」和「定时刷新完成」；只能看到栏目更新过时，定时刷新
+# 完成标「未确认」。
+#
+# 通知：正常时只留运行记录（artifact + Job Summary），不通知。
+# 首次确认异常时开 GitHub issue（scripts/report-autocheck.sh）并让本次运行
+# 变红；同一问题持续期间不重复通知；恢复时评论并关闭 issue。
+name: 每日巡检（新闻页）
+
+on:
+  schedule:
+    # 北京时间 08:25 = UTC 00:25。GitHub 定时任务可能延迟几分钟，脚本的
+    # 只读门禁会据实跳过已过期的缓存，不会因此触发刷新。
+    - cron: "25 0 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: 只读巡检
+        # 脚本在有异常时退出 1；这里不让它直接失败整个 job，是否变红由
+        # report job 按“是否新开了 issue”决定。
+        continue-on-error: true
+        run: |
+          node scripts/check-news-page.mjs --mode daily \
+            --base-url https://xin-wen-ye.vercel.app \
+            --out check-result.json --summary check-summary.md
+      - name: 写入 Job Summary
+        if: always()
+        run: |
+          if [ -f check-summary.md ]; then
+            cat check-summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "检查脚本没有产出摘要。" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: 上传运行记录
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-patrol-${{ github.run_id }}
+          path: |
+            check-result.json
+            check-summary.md
+          retention-days: 30
+          if-no-files-found: warn
+
+  report:
+    needs: check
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    # 与部署验收共用一个并发组：开 issue / 关 issue 的操作串行，避免两个
+    # 检查同时跑时重复开 issue。
+    concurrency:
+      group: autocheck-report
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: 下载运行记录
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: daily-patrol-${{ github.run_id }}
+          path: .
+      - name: 按 issue 状态机通知
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/report-autocheck.sh check-result.json check-summary.md
