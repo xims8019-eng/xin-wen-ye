@@ -236,13 +236,13 @@
   },
   "fitness": {
     "title": "健身 · 动作教学",
-    "note": "2026-11-23s 新增（FITNESS_ITEMS，getFitness 原样返回，常驻精选、不随每日抓取轮换，不调模型、不读数据库）：只做动作教学，没有训练计划和打卡。12 条，胸 2 / 背 2 / 腿臀 3 / 肩 2 / 核心 3；每卡放跟练要用的内容——动作名称、所需器械、起始姿势、动作要点（2–3 条）、一个常见错误、示范直达链接，另有讲解者与视频标题（Bilibili 中文讲解；平板支撑是英配中文字幕译制视频，卡上以 videoNote 注明）。2026-11-24y 更新教学来源：哑铃推举（BV1csj36CEf9，21:16 起）、哑铃侧平举（BV128bX6eExV，单讲 07:59）、哑铃划船（BV1E8un61EVg，时间点待确认）三条换成谭成义本人教程并标注讲解者与视频标题；其余 9 条标 athletePending（选手教学待补充），原链接过渡保留、videoNote 注明「现有链接为过渡保留，非选手教学」。哑铃卧推与杠铃深蹲未换链：谭成义的胸部/腿部合集经实看确认全程没有平板哑铃卧推与杠铃深蹲。客户端在学习之后新增「健身」页签与首页健身区，按部位筛选。",
+    "note": "2026-11-23s 新增（FITNESS_ITEMS，getFitness 原样返回，常驻精选、不随每日抓取轮换，不调模型、不读数据库）：只做动作教学，没有训练计划和打卡。19 条，胸 4 / 背 2 / 腿臀 7 / 肩 2 / 核心 4；每卡放跟练要用的内容——动作名称、所需器械、起始姿势、动作要点（2–3 条）、一个常见错误、示范直达链接，另有讲解者与视频标题（Bilibili 中文讲解；平板支撑是英配中文字幕译制视频，卡上以 videoNote 注明）。2026-11-24y 更新教学来源：哑铃推举（BV1csj36CEf9，21:16 起）、哑铃侧平举（BV128bX6eExV，单讲 07:59）、哑铃划船（BV1E8un61EVg，划船段约 01:07–12:57）三条换成谭成义本人教程并标注讲解者与视频标题。2026-11-24z 再换三条并新增七条（均为谭成义，浏览器实播核对带时间点）：交替哑铃卧推（BV1CAaR6rECN，约 11:00–13:20）、弓步蹲（BV1tRhs6hE8j，约 19:00–21:30）、卷腹（BV1z8Th6BEij，约 06:40–12:00）、罗马尼亚硬拉（BV1tRhs6hE8j，约 16:10–19:00）、健腹轮（BV1z8Th6BEij，约 12:00–16:48）、高脚杯深蹲（BV17aovBqEdg，约 34:00–44:00，凯圣王账号发布、谭成义联合讲解）、杠铃卧推（BV1CSoKBaEgK，约开场–27:00，凯圣王账号发布、谭成义联合讲解）、上斜哑铃卧推（BV1CSoKBaEgK，约 27:00–47:00，凯圣王账号发布、谭成义联合讲解）、保加利亚蹲（BV17aovBqEdg，约 23:00–34:00，凯圣王账号发布、谭成义联合讲解）、臀推（BV1tRhs6hE8j，约 13:05–13:50，双腿）；谭成义卡共 13 条，其余 6 条（俯卧撑、引体向上、杠铃深蹲、臀桥、平板支撑、死虫式）标 athletePending（选手教学待补充），原链接过渡保留、videoNote 注明「现有链接为过渡保留，非选手教学」。杠铃深蹲仍未找到选手教程；单腿硬拉未加——仅有标题卡证据，无器械与动作细节。客户端在学习之后新增「健身」页签与首页健身区，按部位筛选，另有「只看谭成义」开关可与部位筛选叠加。",
     "groups": {
-      "胸": 2,
+      "胸": 4,
       "背": 2,
-      "腿臀": 3,
+      "腿臀": 7,
       "肩": 2,
-      "核心": 3
+      "核心": 4
     },
     "items": [
       {
@@ -251,9 +251,19 @@
         "videoUrl": "https://www.bilibili.com/video/BV1vDaz6WEDA/"
       },
       {
-        "name": "哑铃卧推",
+        "name": "交替哑铃卧推",
         "group": "胸",
-        "videoUrl": "https://www.bilibili.com/video/BV1mD421J7o3/"
+        "videoUrl": "https://www.bilibili.com/video/BV1CAaR6rECN/"
+      },
+      {
+        "name": "杠铃卧推",
+        "group": "胸",
+        "videoUrl": "https://www.bilibili.com/video/BV1CSoKBaEgK/"
+      },
+      {
+        "name": "上斜哑铃卧推",
+        "group": "胸",
+        "videoUrl": "https://www.bilibili.com/video/BV1CSoKBaEgK/"
       },
       {
         "name": "引体向上",
@@ -263,7 +273,7 @@
       {
         "name": "哑铃划船",
         "group": "背",
-        "videoUrl": "https://www.bilibili.com/video/BV1Va411o7Mc/"
+        "videoUrl": "https://www.bilibili.com/video/BV1E8un61EVg/"
       },
       {
         "name": "杠铃深蹲",
@@ -276,19 +286,39 @@
         "videoUrl": "https://www.bilibili.com/video/BV1Jg4y1z7Nm/"
       },
       {
-        "name": "箭步蹲",
+        "name": "弓步蹲",
         "group": "腿臀",
-        "videoUrl": "https://www.bilibili.com/video/BV1Kz4y1D7R6/"
+        "videoUrl": "https://www.bilibili.com/video/BV1tRhs6hE8j/"
+      },
+      {
+        "name": "罗马尼亚硬拉",
+        "group": "腿臀",
+        "videoUrl": "https://www.bilibili.com/video/BV1tRhs6hE8j/"
+      },
+      {
+        "name": "高脚杯深蹲",
+        "group": "腿臀",
+        "videoUrl": "https://www.bilibili.com/video/BV17aovBqEdg/"
+      },
+      {
+        "name": "保加利亚蹲",
+        "group": "腿臀",
+        "videoUrl": "https://www.bilibili.com/video/BV17aovBqEdg/"
+      },
+      {
+        "name": "臀推",
+        "group": "腿臀",
+        "videoUrl": "https://www.bilibili.com/video/BV1tRhs6hE8j/"
       },
       {
         "name": "哑铃推举（坐姿哑铃推肩）",
         "group": "肩",
-        "videoUrl": "https://www.bilibili.com/video/BV1ym421M7DV/"
+        "videoUrl": "https://www.bilibili.com/video/BV1csj36CEf9/"
       },
       {
         "name": "哑铃侧平举",
         "group": "肩",
-        "videoUrl": "https://www.bilibili.com/video/BV13fnvzpE8o/"
+        "videoUrl": "https://www.bilibili.com/video/BV128bX6eExV/"
       },
       {
         "name": "平板支撑",
@@ -298,7 +328,12 @@
       {
         "name": "卷腹",
         "group": "核心",
-        "videoUrl": "https://www.bilibili.com/video/BV18J4m1w76p/"
+        "videoUrl": "https://www.bilibili.com/video/BV1z8Th6BEij/"
+      },
+      {
+        "name": "健腹轮",
+        "group": "核心",
+        "videoUrl": "https://www.bilibili.com/video/BV1z8Th6BEij/"
       },
       {
         "name": "死虫式",

@@ -2164,6 +2164,41 @@ type LearningCandidate = FeedItem & {
   officialHint: string | null;
 };
 
+/**
+ * Same-course dedupe (z-round, 2026-11-24): one course listed under two
+ * platform entries is ONE course. Key = the title with punctuation,
+ * spacing and dash variants stripped, plus the school named in the
+ * title — so 「网络安全-应用技术与工程实践（北京理工大学）」 (the
+ * 学堂在线 entry in CURATED_LEARNING_ANYTIME) and 「网络安全——应用
+ * 技术与工程实践（北京理工大学）」 (the MOOC entry in
+ * CURATED_LEARNING_AI) match, while every other course keeps its own
+ * key. Within a group the entry carrying aiTopic=true wins, so the
+ * survivor stays in both 随时可学 and the 「AI 学习」 filter; the
+ * survivor keeps its own url / source / startHint. Applied at ingest
+ * in loadLearning (so the persisted cache and getDailyDigest, which
+ * reads through loadLearning, agree) and on every getLearning read
+ * over the merged curated + pool list (so cached payloads written
+ * before this rule are corrected too).
+ */
+export function collapseSameCourseEntries<T extends { title: string; aiTopic?: boolean }>(items: T[]): T[] {
+  const keyOf = (title: string): string => {
+    const school = title.match(/（([^）]+)）\s*$/)?.[1] ?? "";
+    const core = title
+      .replace(/[（）()]/g, "")
+      .replace(/[\s\-—–·、。，；：？！《》〈〉「」『』""''‐‑]/g, "")
+      .toLowerCase();
+    return `${core}|${school}`;
+  };
+  const best = new Map<string, T>();
+  for (const it of items) {
+    const k = keyOf(it.title);
+    const prev = best.get(k);
+    if (!prev || (it.aiTopic === true && prev.aiTopic !== true)) best.set(k, it);
+  }
+  const kept = new Set(best.values());
+  return items.filter((it) => kept.has(it));
+}
+
 async function loadLearning(
   ctx: Ctx,
   force: boolean,
@@ -2568,6 +2603,12 @@ async function loadLearning(
     const tb = b.publishedAt ? new Date(b.publishedAt).getTime() : 0;
     return tb - ta;
   });
+
+  // Same-course dedupe (z-round, 2026-11-24): one course under two
+  // platform entries counts once — see collapseSameCourseEntries. The
+  // persisted cache below therefore never stores the duplicate, and
+  // getDailyDigest (which reads through loadLearning) agrees.
+  items.splice(0, items.length, ...collapseSameCourseEntries(items));
 
   // 7) Persistence guard: if this run produced NO enriched item at all while
   //    a previous version has enriched items, keep serving the previous
@@ -5369,7 +5410,7 @@ const JIANGXI_ARCHIVE_ITEMS: JiangxiArchiveItem[] = [
 
 type CuratedLearningItem = z.infer<typeof learningItemSchema>;
 
-const CURATED_LEARNING_ANYTIME: CuratedLearningItem[] = [
+export const CURATED_LEARNING_ANYTIME: CuratedLearningItem[] = [
   {
     title: "网络安全-应用技术与工程实践（北京理工大学）",
     url: "https://higher.smartedu.cn/course/66a033b5711dc30c34ab8067",
@@ -5580,7 +5621,7 @@ const CURATED_LEARNING_ANYTIME: CuratedLearningItem[] = [
 // → the BIT security course's system view (item 7 ch.6 & 8).
 // ---------------------------------------------------------------------------
 
-const CURATED_LEARNING_AI: CuratedLearningItem[] = [
+export const CURATED_LEARNING_AI: CuratedLearningItem[] = [
   {
     title: "人工智能应用基础（北京电子科技职业学院）",
     url: "https://www.icourse163.org/course/DKY-1460382164",
@@ -5761,10 +5802,11 @@ const CURATED_LEARNING_AI: CuratedLearningItem[] = [
     publishedAt: null,
     category: "courses",
     summaryZh:
-      "能学什么：从加密认证、防火墙、入侵检测到量子密码、区块链的网络安全技术体系与工程实践；其中与 AI 直接相关的是第 6 章“网络安全智能分析与反制技术”（风险评估、态势感知）和第 8 章 8.6“人工智能与网络安全”。",
+      "能学什么：从加密认证、防火墙、入侵检测到量子密码、区块链的网络安全技术体系与工程实践；其中与 AI 直接相关的是第 6 章“网络安全智能分析与反制技术”（风险评估、态势感知）和第 8 章 8.6“人工智能与网络安全”。同一门课在国家高等教育智慧教育平台（学堂在线聚合）另有入口，开课中（2026/07/23–2027/01/12），页面明写也适用于零基础和社会人士。",
     points: [
       "需要什么基础：建议具备计算机、网络、软件工程等信息化方面基础知识；零基础也可循序渐进，但建议有计算机/网络基础后再重点看第 6、8 章。",
       "费用：免费学习，需免费注册账号选课；仅认证证书付费。",
+      "另一入口（同一门课）：国家高等教育智慧教育平台 https://higher.smartedu.cn/course/66a033b5711dc30c34ab8067 ，两个入口任选其一。",
     ],
     relevance: "AI 学习路线的最后一步：在安全体系里看 AI 的位置——第 6 章态势感知与 8.6 人工智能与网络安全，与你的专业最对口。",
     startHint:
@@ -5784,7 +5826,7 @@ const CURATED_LEARNING_AI: CuratedLearningItem[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// 健身栏 (2026-11-23): twelve hand-verified free Chinese video tutorials
+// 健身栏 (2026-11-23): hand-verified free Chinese video tutorials
 // for basic exercises — 动作教学 only, deliberately NO training plan and
 // NO check-in feature. Persistent curated content (never rotates with
 // the daily fetch), served by getFitness. Every card carries 动作名称、
@@ -5792,13 +5834,29 @@ const CURATED_LEARNING_AI: CuratedLearningItem[] = [
 // (Bilibili 中文讲解； the plank video is an English-narrated upload
 // with Chinese subtitles, noted on its card), plus the video's
 // 讲解者 / 标题 when the tutorial is by a verified athlete.
-// Groups: 胸 2、背 2、腿臀 3、肩 2、核心 3.
+// Groups (19 cards): 胸 4、背 2、腿臀 7、肩 2、核心 4.
 // y-round (2026-11-24): three cards now link to 谭成义 tutorials
 // (哑铃推举、哑铃侧平举、哑铃划船); the other nine keep their existing
 // links as 过渡保留 and are flagged athletePending (选手教学待补充).
 // 谭成义's chest/leg compilations were checked by playback sampling and
-// do NOT contain 平板哑铃卧推 / 杠铃深蹲， so 哑铃卧推 and 杠铃深蹲 were
-// deliberately NOT switched to them.
+// do NOT contain 平板哑铃卧推 / 杠铃深蹲， so those two cards stayed
+// athletePending in y-round; z-round found 交替哑铃卧推 in a different
+// 谭成义 upper-limb video (BV1CAaR6rECN), while 杠铃深蹲 is still
+// unfound and stays pending.
+// z-round (2026-11-24): three cards swapped to 谭成义 tutorials verified
+// by playback sampling （交替哑铃卧推 BV1CAaR6rECN 约 11:00–13:20、
+// 弓步蹲 BV1tRhs6hE8j 约 19:00–21:30、卷腹 BV1z8Th6BEij 约 06:40–12:00),
+// and seven new 谭成义 cards added （罗马尼亚硬拉、健腹轮、高脚杯深蹲、
+// 杠铃卧推、上斜哑铃卧推、保加利亚蹲、臀推 — the last three from
+// 凯圣王-account videos co-presented by 谭成义， noted on the card).
+// 13 of the 19 cards are 谭成义 tutorials; the remaining six
+// （俯卧撑、引体向上、杠铃深蹲、臀桥、平板支撑、死虫式） still carry
+// athletePending （选手教学待补充） with their old links kept as 过渡保留.
+// 单腿硬拉 was NOT added: the only playback evidence is its title card
+// (BV17aovBqEdg at 10:06 / 20:06) — no verified equipment or movement
+// detail, so no card was invented for it. Card points not shown in the
+// video are marked 编辑补充 in videoNote, never presented as the
+// instructor's own words.
 // ---------------------------------------------------------------------------
 
 const fitnessItemSchema = z.object({
@@ -5817,11 +5875,13 @@ const fitnessItemSchema = z.object({
   videoTitle: z.string().nullable().default(null),
   /** True when no verified athlete tutorial has been found yet （选手教学待补充）. */
   athletePending: z.boolean().default(false),
+  /** True when the linked tutorial is by 谭成义 (own account or co-presented); drives the client's 「只看谭成义」 filter. */
+  tanChengyi: z.boolean().default(false),
 });
 
 type FitnessItemData = z.infer<typeof fitnessItemSchema>;
 
-const FITNESS_ITEMS: FitnessItemData[] = [
+export const FITNESS_ITEMS: FitnessItemData[] = [
   {
     name: "俯卧撑",
     group: "胸",
@@ -5838,23 +5898,61 @@ const FITNESS_ITEMS: FitnessItemData[] = [
     instructor: null,
     videoTitle: null,
     athletePending: true,
+    tanChengyi: false,
   },
   {
-    name: "哑铃卧推",
+    name: "交替哑铃卧推",
     group: "胸",
-    equipment: "哑铃一对＋平板卧推凳（无凳可躺地面做）",
-    startPosition: "仰卧于平板凳，双脚踩稳地面，双手各握一哑铃置于胸部两侧",
+    equipment: "哑铃一对＋小角度斜板",
+    startPosition: "仰卧于小角度斜板，双脚踩稳地面，右臂持哑铃上举、左臂屈于胸前，两侧交替",
+    points: [
+      "两侧交替上推，一侧上举时另一侧屈于胸前",
+      "肩胛骨后收下沉、贴紧斜板，全程不松掉",
+      "呼气上推、吸气下放，上推时手肘微屈不锁死",
+    ],
+    commonMistake: "两侧节奏不一、身体左右晃动，或肩胛骨松掉耸肩推起",
+    videoUrl: "https://www.bilibili.com/video/BV1CAaR6rECN/",
+    videoNote: "交替卧推段约 11:00–13:20；卡片要点为编辑补充，非讲解者原话",
+    instructor: "谭成义",
+    videoTitle: "希望对大家有所帮助！！",
+    athletePending: false,
+    tanChengyi: true,
+  },
+  {
+    name: "杠铃卧推",
+    group: "胸",
+    equipment: "杠铃＋卧推凳",
+    startPosition: "仰卧于平板凳，双脚踩稳地面，双手握杠置于胸部上方",
     points: [
       "肩胛骨后收下沉、贴紧凳面，全程不松掉",
+      "前臂始终垂直地面，不左右晃动",
+      "呼气上推、吸气下放，上推时手肘微屈不锁死",
+    ],
+    commonMistake: "肩胛骨松掉、耸肩推起，杠铃晃动、前臂歪斜",
+    videoUrl: "https://www.bilibili.com/video/BV1CSoKBaEgK/",
+    videoNote: "凯圣王账号发布、谭成义联合讲解；杠铃卧推段约开场–27:00；卡片要点为编辑补充，非讲解者原话",
+    instructor: "谭成义（与凯圣王联合讲解）",
+    videoTitle: "凯圣王-谭成义三分化②——跟练胸肩三头",
+    athletePending: false,
+    tanChengyi: true,
+  },
+  {
+    name: "上斜哑铃卧推",
+    group: "胸",
+    equipment: "哑铃一对＋上斜卧推凳",
+    startPosition: "仰卧于上斜凳，双脚踩稳地面，双手各握一哑铃置于胸部两侧",
+    points: [
+      "肩胛骨后收下沉、贴紧斜板，全程不松掉",
       "前臂始终垂直地面，不左右晃动",
       "呼气上推、吸气下放，上推时手肘主动往中间靠拢",
     ],
     commonMistake: "肩胛骨松掉、耸肩推起，哑铃晃动、前臂歪斜",
-    videoUrl: "https://www.bilibili.com/video/BV1mD421J7o3/",
-    videoNote: "现有链接为过渡保留，非选手教学",
-    instructor: null,
-    videoTitle: null,
-    athletePending: true,
+    videoUrl: "https://www.bilibili.com/video/BV1CSoKBaEgK/",
+    videoNote: "凯圣王账号发布、谭成义联合讲解；上斜卧推段约 27:00–47:00；卡片要点为编辑补充，非讲解者原话",
+    instructor: "谭成义（与凯圣王联合讲解）",
+    videoTitle: "凯圣王-谭成义三分化②——跟练胸肩三头",
+    athletePending: false,
+    tanChengyi: true,
   },
   {
     name: "引体向上",
@@ -5872,6 +5970,7 @@ const FITNESS_ITEMS: FitnessItemData[] = [
     instructor: null,
     videoTitle: null,
     athletePending: true,
+    tanChengyi: false,
   },
   {
     name: "哑铃划船",
@@ -5889,6 +5988,7 @@ const FITNESS_ITEMS: FitnessItemData[] = [
     instructor: "谭成义",
     videoTitle: "哑铃划船，哑铃反飞鸟动作教学，希望对大家有所帮助！！",
     athletePending: false,
+    tanChengyi: true,
   },
   {
     name: "杠铃深蹲",
@@ -5906,6 +6006,7 @@ const FITNESS_ITEMS: FitnessItemData[] = [
     instructor: null,
     videoTitle: null,
     athletePending: true,
+    tanChengyi: false,
   },
   {
     name: "臀桥",
@@ -5923,23 +6024,97 @@ const FITNESS_ITEMS: FitnessItemData[] = [
     instructor: null,
     videoTitle: null,
     athletePending: true,
+    tanChengyi: false,
   },
   {
-    name: "箭步蹲",
+    name: "弓步蹲",
     group: "腿臀",
-    equipment: "徒手起步，可选哑铃一对",
-    startPosition: "站立、躯干正直，双手握哑铃自然下垂于体侧",
+    equipment: "哑铃一对",
+    startPosition: "站立、躯干正直，双手持哑铃于肩，双臂可上举持哑铃",
     points: [
       "向前迈步、脚跟先着地，重心放前脚跟",
-      "前膝沿脚尖方向下蹲至约 90°",
-      "后膝弯曲但不触地，双脚始终朝向前方",
+      "前膝沿脚尖方向下蹲至约 90°，后膝弯曲但不触地",
+      "推起后交替换步，双脚始终朝向前方",
     ],
     commonMistake: "步幅太小，或双脚踩在一条直线上像走钢丝，失去平衡",
-    videoUrl: "https://www.bilibili.com/video/BV1Kz4y1D7R6/",
-    videoNote: "现有链接为过渡保留，非选手教学",
-    instructor: null,
-    videoTitle: null,
-    athletePending: true,
+    videoUrl: "https://www.bilibili.com/video/BV1tRhs6hE8j/",
+    videoNote: "弓步蹲段约 19:00–21:30；卡片要点为编辑补充，非讲解者原话",
+    instructor: "谭成义",
+    videoTitle: "下肢功能加肌力训练，希望对大家有所帮助！！",
+    athletePending: false,
+    tanChengyi: true,
+  },
+  {
+    name: "罗马尼亚硬拉",
+    group: "腿臀",
+    equipment: "哑铃一对",
+    startPosition: "双脚与肩同宽站立，双手持哑铃置于大腿前，挺胸收腹",
+    points: [
+      "屈髋后移、膝盖微屈，哑铃沿大腿下放至膝下",
+      "躯干俯至近水平，腰背挺直不弓背",
+      "臀部与腘绳肌发力站直，顶峰收紧臀部",
+    ],
+    commonMistake: "弓背弯腰、用腰拉起，或膝盖锁死全程直腿",
+    videoUrl: "https://www.bilibili.com/video/BV1tRhs6hE8j/",
+    videoNote: "罗马尼亚硬拉段约 16:10–19:00；卡片要点为编辑补充，非讲解者原话",
+    instructor: "谭成义",
+    videoTitle: "下肢功能加肌力训练，希望对大家有所帮助！！",
+    athletePending: false,
+    tanChengyi: true,
+  },
+  {
+    name: "高脚杯深蹲",
+    group: "腿臀",
+    equipment: "哑铃一只",
+    startPosition: "双脚与肩同宽站立，双手持一只哑铃于胸前，挺胸收腹",
+    points: [
+      "先屈髋再屈膝，臀部向后坐",
+      "膝盖沿脚尖方向移动，不内扣",
+      "下蹲吸气、起身呼气，全程脚跟踩实发力",
+    ],
+    commonMistake: "膝盖内扣，或塌腰弓背、蹲太低出现“骨盆眨眼”",
+    videoUrl: "https://www.bilibili.com/video/BV17aovBqEdg/",
+    videoNote: "凯圣王账号发布、谭成义联合讲解；高脚杯深蹲段约 34:00–44:00；卡片要点为编辑补充，非讲解者原话",
+    instructor: "谭成义（与凯圣王联合讲解）",
+    videoTitle: "凯圣王-谭成义三分化⑤——跟练腿股四头肌腘绳肌",
+    athletePending: false,
+    tanChengyi: true,
+  },
+  {
+    name: "保加利亚蹲",
+    group: "腿臀",
+    equipment: "哑铃一对＋矮凳（后脚垫高）",
+    startPosition: "前脚站立、后脚脚背垫于身后矮凳，双手各握一哑铃垂于体侧，躯干挺直",
+    points: [
+      "前膝沿脚尖方向下蹲，后膝弯曲但不触地",
+      "重心放前脚跟，全程躯干挺直不前倾",
+      "缓慢有控制地起身，双脚始终朝向前方",
+    ],
+    commonMistake: "重心跑到后脚，或前膝内扣、身体大幅前倾",
+    videoUrl: "https://www.bilibili.com/video/BV17aovBqEdg/",
+    videoNote: "凯圣王账号发布、谭成义联合讲解；保加利亚蹲段约 23:00–34:00；卡片要点为编辑补充，非讲解者原话",
+    instructor: "谭成义（与凯圣王联合讲解）",
+    videoTitle: "凯圣王-谭成义三分化⑤——跟练腿股四头肌腘绳肌",
+    athletePending: false,
+    tanChengyi: true,
+  },
+  {
+    name: "臀推",
+    group: "腿臀",
+    equipment: "低凳（徒手）",
+    startPosition: "坐地、肩靠低凳，双腿屈膝、双脚平放着地",
+    points: [
+      "臀部发力抬髋，至躯干与大腿成一条直线",
+      "顶峰收紧臀部稍作停顿",
+      "缓慢有控制地下放，腰背保持稳定不用腰代偿",
+    ],
+    commonMistake: "腰部反弓、过度顶髋借力，或动作速度过快",
+    videoUrl: "https://www.bilibili.com/video/BV1tRhs6hE8j/",
+    videoNote: "臀推段约 13:05–13:50；双腿臀推（无单腿、无跳）；卡片要点为编辑补充，非讲解者原话",
+    instructor: "谭成义",
+    videoTitle: "下肢功能加肌力训练，希望对大家有所帮助！！",
+    athletePending: false,
+    tanChengyi: true,
   },
   {
     name: "哑铃推举（坐姿哑铃推肩）",
@@ -5957,6 +6132,7 @@ const FITNESS_ITEMS: FitnessItemData[] = [
     instructor: "谭成义",
     videoTitle: "私教系列之肩部教学，希望对大家有所帮助！！",
     athletePending: false,
+    tanChengyi: true,
   },
   {
     name: "哑铃侧平举",
@@ -5974,6 +6150,7 @@ const FITNESS_ITEMS: FitnessItemData[] = [
     instructor: "谭成义",
     videoTitle: "哑铃侧平举动作讲解，希望对大家有所帮助！！",
     athletePending: false,
+    tanChengyi: true,
   },
   {
     name: "平板支撑",
@@ -5991,23 +6168,43 @@ const FITNESS_ITEMS: FitnessItemData[] = [
     instructor: null,
     videoTitle: null,
     athletePending: true,
+    tanChengyi: false,
   },
   {
     name: "卷腹",
     group: "核心",
     equipment: "徒手（瑜伽垫）",
-    startPosition: "仰卧屈膝，双脚平放与肩同宽，双手轻放耳旁或交叉于胸前",
+    startPosition: "仰卧屈膝，双脚平放与肩同宽，双手置于脑后",
     points: [
       "下背始终贴地，只卷起上背、肩胛骨离地即可",
       "呼气卷起，顶端收紧腹肌停 1 秒",
       "吸气缓慢有控制地下放",
     ],
     commonMistake: "双手抱头用力拉脖子借力，或幅度过大做成仰卧起坐、下背离地",
-    videoUrl: "https://www.bilibili.com/video/BV18J4m1w76p/",
-    videoNote: "现有链接为过渡保留，非选手教学",
-    instructor: null,
-    videoTitle: null,
-    athletePending: true,
+    videoUrl: "https://www.bilibili.com/video/BV1z8Th6BEij/",
+    videoNote: "卷腹段约 06:40–12:00；卡片要点为编辑补充，非讲解者原话",
+    instructor: "谭成义",
+    videoTitle: "腹肌动作教学，希望对大家有所帮助！！",
+    athletePending: false,
+    tanChengyi: true,
+  },
+  {
+    name: "健腹轮",
+    group: "核心",
+    equipment: "健腹轮（瑜伽垫）",
+    startPosition: "跪姿，双手握健腹轮置于身前地面，收紧核心",
+    points: [
+      "先深吸一口气，再缓慢向前推出健腹轮",
+      "全程收紧核心、腰背不塌陷",
+      "用腹肌发力收回，动作放慢不借惯性",
+    ],
+    commonMistake: "腰部塌陷反弓，或推出过远失控、收不回来",
+    videoUrl: "https://www.bilibili.com/video/BV1z8Th6BEij/",
+    videoNote: "健腹轮段约 12:00–16:48；卡片要点为编辑补充，非讲解者原话",
+    instructor: "谭成义",
+    videoTitle: "腹肌动作教学，希望对大家有所帮助！！",
+    athletePending: false,
+    tanChengyi: true,
   },
   {
     name: "死虫式",
@@ -6025,6 +6222,7 @@ const FITNESS_ITEMS: FitnessItemData[] = [
     instructor: null,
     videoTitle: null,
     athletePending: true,
+    tanChengyi: false,
   },
 ];
 
@@ -6980,7 +7178,7 @@ export const Actions = {
 
   getLearning: defineAction({
     description:
-      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生； since 2026-11-23 the stage signals — middle school(s), 中小学， 初中， 高中生， 中六， JUPAS, DSE, 研究生/硕士研究生 — are matched against title + summary + points + audienceStage together, so an item whose stage is stated only in its body, e.g. an HKU undergraduate item naming JUPAS/中六 in its points, is excluded too), pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships), activity write-ups whose summary dates the event in the past (\"X月X日……举行/举办/召开\" with no replay and no sign-up, e.g. the 东湖大咖公开课 report), 专硕/学硕 master's-stage items (e.g. the 专硕 dorm-policy news), scholarships limited to one local school district's students or to high-school students only (school district / juniors and seniors / high school football / high school athlete / 学区 / 高中生， e.g. the St. Joseph scholarship and the People high-school athlete scholarship story) and expired intakes are all filtered out, so the list may honestly be empty. 自 2026-11-23 起另有两条规则：只有宣传博客、限时试听或无法核实免费范围的内容不进学习栏（课程卡必须直接链接到可免费学习的具体课程、练习或讲座回放；免费注册、仅证书收费的课程保留）；已发放/已颁发类报道不进可报名列表且 needsApplication 纠正为 false，只有官方页面确认报名已开放、报名免费且申请范围包含中国专科在读生时才列入，官方明确滚动报名或常年开放的项目即使没有截止日期也可保留。 HTML entities (&#…; and &…;, incl. double-encoded forms) are decoded in titles, points and summaries at ingest and on every read (2026-11-23), and an unenriched item's summary/relevance line is rebuilt from complete sentences of its own source summary — never cut mid-sentence and never a fabricated translation. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip. Since 2026-11-23 the list is split into two display groups via each item's group field: seven hand-verified free resources that can be started right now (CURATED_LEARNING_ANYTIME — 网络安全/英语公开课， authorised CTF practice, a Cambridge lecture recording; each with a startHint naming the first lesson or exercise) lead the items array as group=anytime, followed by pool courses/resources (also anytime); pool opportunities with a deadline in the next 30 days and a confirmed official entry are group=upcoming （近期可报名）; a rolling / long-term-open opportunity in the 近期可报名 class is group=upcoming even without a deadline, and after the z-round two-class gate no pool item keeps group=null. The curated 近期可报名 set is empty this round — no official page was verified as explicitly open and free — so that group may honestly show its empty state. 自 2026-11-23 起，池内条目只有含真实可学内容（课程/讲座/回放/练习/实验）才进随时可学；纯政策新闻（征求意见稿、管理条例/办法类通知，如《教材管理条例（征求意见稿）》）由学习栏规则滤掉，永不为 group=anytime。自 2026-11-23 起另有 7 门人工核实的免费中文 AI 课程（CURATED_LEARNING_AI）作为持久精选随随时可学一同返回，每门带 aiTopic=true 供客户端的「AI 学习」话题筛选使用（能学什么/需要什么基础/从哪一课开始都写在卡上；全部免费学习、需免费注册、仅认证证书付费）；池内条目永不带 aiTopic。自 2026-11-23 起，Coursera 博客《Introducing AI Series on Coursera》（背后是 Coursera Plus 付费订阅、无单门免费带中文字幕课程、面向在职人士）由宣传博客规则从学习栏整个移除，不再保留随时可学位置；吴恩达《AI for Everyone》因只有非官方搬运、正版免费旁听与中文字幕未核实而不收录。自 2026-11-24 起另有一条确定性规则：标题含「夜校」、费用未说明、无 startHint、无截止日期且链接不在课程/学习平台域名上的条目，按纯新闻滤掉（如广州日报大洋网的青年夜校生活方式报道——没有任何具体课程、报名入口或免费学习入口）；带费用说明或开始提示的真实夜校课程不受影响。自 2026-11-24 起另有两类守门规则（z-round）：池内条目只有符合随时可学（有明确的免费课程、练习或回放入口；免费注册、仅证书收费保留）或近期可报名（有主办方官方报名入口、确认当前开放、报名免费且专科在读符合条件；官方明确长期/滚动开放的项目可以没有截止日期）才保留，两类都不满足的条目从学习列表彻底移除，不再进入「其他学习机会」；仅 needsApplication=true、未核实费用的招生/奖学金汇总、已颁发获奖名单、论坛邀请、博客文章和天气新闻等均被滤掉。自 2026-11-24 起再收紧（aa-round）：opportunities 类条目只能经「近期可报名」类合格，不能再靠「随时可学」的文本碎片混入后以 group=null 落进「其他学习机会」；随时可学的免费证据须由 免费 直接绑定课程/练习/回放等可学入口（裸「免费开放」和「免费…（隔字）…课程」不再算数），可学信号不再认裸字「课」（停课不算课程）；标题为天气/气象预报预警类且无自身学习入口的条目按纯新闻滤掉；汇总/盘点类标题不算单项官方报名入口，Outlook safelinks 跳转链接不算主办方官方入口，范围证据里的裸「不限」须为学历/专业/学校/年级不限才算。学习缓存键升至 learning:all:v3，旧缓存不再被读到。",
+      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生； since 2026-11-23 the stage signals — middle school(s), 中小学， 初中， 高中生， 中六， JUPAS, DSE, 研究生/硕士研究生 — are matched against title + summary + points + audienceStage together, so an item whose stage is stated only in its body, e.g. an HKU undergraduate item naming JUPAS/中六 in its points, is excluded too), pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships), activity write-ups whose summary dates the event in the past (\"X月X日……举行/举办/召开\" with no replay and no sign-up, e.g. the 东湖大咖公开课 report), 专硕/学硕 master's-stage items (e.g. the 专硕 dorm-policy news), scholarships limited to one local school district's students or to high-school students only (school district / juniors and seniors / high school football / high school athlete / 学区 / 高中生， e.g. the St. Joseph scholarship and the People high-school athlete scholarship story) and expired intakes are all filtered out, so the list may honestly be empty. 自 2026-11-23 起另有两条规则：只有宣传博客、限时试听或无法核实免费范围的内容不进学习栏（课程卡必须直接链接到可免费学习的具体课程、练习或讲座回放；免费注册、仅证书收费的课程保留）；已发放/已颁发类报道不进可报名列表且 needsApplication 纠正为 false，只有官方页面确认报名已开放、报名免费且申请范围包含中国专科在读生时才列入，官方明确滚动报名或常年开放的项目即使没有截止日期也可保留。 HTML entities (&#…; and &…;, incl. double-encoded forms) are decoded in titles, points and summaries at ingest and on every read (2026-11-23), and an unenriched item's summary/relevance line is rebuilt from complete sentences of its own source summary — never cut mid-sentence and never a fabricated translation. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip. Since 2026-11-23 the list is split into two display groups via each item's group field: seven hand-verified free resources that can be started right now (CURATED_LEARNING_ANYTIME — 网络安全/英语公开课， authorised CTF practice, a Cambridge lecture recording; each with a startHint naming the first lesson or exercise) lead the items array as group=anytime, followed by pool courses/resources (also anytime); pool opportunities with a deadline in the next 30 days and a confirmed official entry are group=upcoming （近期可报名）; a rolling / long-term-open opportunity in the 近期可报名 class is group=upcoming even without a deadline, and after the z-round two-class gate no pool item keeps group=null. The curated 近期可报名 set is empty this round — no official page was verified as explicitly open and free — so that group may honestly show its empty state. 自 2026-11-23 起，池内条目只有含真实可学内容（课程/讲座/回放/练习/实验）才进随时可学；纯政策新闻（征求意见稿、管理条例/办法类通知，如《教材管理条例（征求意见稿）》）由学习栏规则滤掉，永不为 group=anytime。自 2026-11-23 起另有 7 门人工核实的免费中文 AI 课程（CURATED_LEARNING_AI）作为持久精选随随时可学一同返回，每门带 aiTopic=true 供客户端的「AI 学习」话题筛选使用（能学什么/需要什么基础/从哪一课开始都写在卡上；全部免费学习、需免费注册、仅认证证书付费）；池内条目永不带 aiTopic。自 2026-11-23 起，Coursera 博客《Introducing AI Series on Coursera》（背后是 Coursera Plus 付费订阅、无单门免费带中文字幕课程、面向在职人士）由宣传博客规则从学习栏整个移除，不再保留随时可学位置；吴恩达《AI for Everyone》因只有非官方搬运、正版免费旁听与中文字幕未核实而不收录。自 2026-11-24 起另有一条确定性规则：标题含「夜校」、费用未说明、无 startHint、无截止日期且链接不在课程/学习平台域名上的条目，按纯新闻滤掉（如广州日报大洋网的青年夜校生活方式报道——没有任何具体课程、报名入口或免费学习入口）；带费用说明或开始提示的真实夜校课程不受影响。自 2026-11-24 起另有两类守门规则（z-round）：池内条目只有符合随时可学（有明确的免费课程、练习或回放入口；免费注册、仅证书收费保留）或近期可报名（有主办方官方报名入口、确认当前开放、报名免费且专科在读符合条件；官方明确长期/滚动开放的项目可以没有截止日期）才保留，两类都不满足的条目从学习列表彻底移除，不再进入「其他学习机会」；仅 needsApplication=true、未核实费用的招生/奖学金汇总、已颁发获奖名单、论坛邀请、博客文章和天气新闻等均被滤掉。自 2026-11-24 起再收紧（aa-round）：opportunities 类条目只能经「近期可报名」类合格，不能再靠「随时可学」的文本碎片混入后以 group=null 落进「其他学习机会」；随时可学的免费证据须由 免费 直接绑定课程/练习/回放等可学入口（裸「免费开放」和「免费…（隔字）…课程」不再算数），可学信号不再认裸字「课」（停课不算课程）；标题为天气/气象预报预警类且无自身学习入口的条目按纯新闻滤掉；汇总/盘点类标题不算单项官方报名入口，Outlook safelinks 跳转链接不算主办方官方入口，范围证据里的裸「不限」须为学历/专业/学校/年级不限才算。学习缓存键升至 learning:all:v3，旧缓存不再被读到。自 2026-11-24 起同一课程在两个平台的入口去重（`collapseSameCourseEntries`，入库 `loadLearning` 与每次 `getLearning` 读回都执行，`getDailyDigest` 经 `loadLearning` 同样去重）：北理工《网络安全——应用技术与工程实践》在学堂在线与 MOOC 各有一条精选，只保留带 `aiTopic` 的 MOOC 条目，合并列表 13 条、AI 筛选仍 7 条；去重键为归一化标题（去标点/空白/横线变体）＋标题末尾括号里的学校。",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -7058,13 +7256,13 @@ export const Actions = {
       // 「AI 学习」 topic filter selects on aiTopic, which pool items
       // never carry (so the Coursera blog keeps its pool place in
       // 随时可学 but never enters the AI filter).
-      return { items: [...CURATED_LEARNING_ANYTIME, ...CURATED_LEARNING_AI, ...grouped], deadlines, asOf };
+      return { items: collapseSameCourseEntries([...CURATED_LEARNING_ANYTIME, ...CURATED_LEARNING_AI, ...grouped]), deadlines, asOf };
     },
   }),
 
   getFitness: defineAction({
     description:
-      "Returns the 健身 (fitness) column: twelve hand-verified free Chinese video tutorials for basic exercises, grouped 胸 (2) / 背 (2) / 腿臀 (3) / 肩 (2) / 核心 (3), covering bodyweight and common gym equipment. Each card carries 动作名称、所需器械、起始姿势、动作要点 (2–3)、一个常见错误、示范直达链接 (Bilibili; the plank demo is English-narrated with Chinese subtitles, noted on the card), plus 讲解者 and 视频标题 when the tutorial is a verified athlete's. Three cards （哑铃推举、哑铃侧平举、哑铃划船） link to 谭成义 tutorials; the other nine keep their existing links as 过渡保留 and carry athletePending=true （选手教学待补充）. Persistent curated content: it never rotates with the daily refresh, and the column is 动作教学 only — deliberately no training plan and no check-in feature.",
+      "Returns the 健身 (fitness) column: nineteen hand-verified free Chinese video tutorials for basic exercises, grouped 胸 (4) / 背 (2) / 腿臀 (7) / 肩 (2) / 核心 (4), covering bodyweight and common gym equipment. Each card carries 动作名称、所需器械、起始姿势、动作要点 (2–3)、一个常见错误、示范直达链接 (Bilibili; the plank demo is English-narrated with Chinese subtitles, noted on the card), plus 讲解者 and 视频标题 when the tutorial is a verified athlete's. Thirteen cards link to 谭成义 tutorials (nine from his own account, four co-presented on the 凯圣王 account); the other six keep their existing links as 过渡保留 and carry athletePending=true （选手教学待补充）. Persistent curated content: it never rotates with the daily refresh, and the column is 动作教学 only — deliberately no training plan and no check-in feature.",
     request: z.object({}),
     response: z.object({
       items: z.array(fitnessItemSchema),

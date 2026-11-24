@@ -796,14 +796,32 @@ function FitnessCard({ item }: { item: FitnessItem }) {
 
 function FitnessBrowser() {
   const [group, setGroup] = useState("全部");
+  const [tanOnly, setTanOnly] = useState(false);
   const q = useQuery({ queryKey: ["fitness"], queryFn: () => api.getFitness({}) });
   const all = q.data?.items ?? [];
-  const items = all.filter((it) => group === "全部" || it.group === group);
+  const tanCount = all.filter((it) => it.tanChengyi).length;
+  const base = tanOnly ? all.filter((it) => it.tanChengyi) : all;
+  const items = base.filter((it) => group === "全部" || it.group === group);
   return (
     <>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          aria-pressed={tanOnly}
+          onClick={() => setTanOnly(!tanOnly)}
+          className={`rounded-full px-3.5 text-sm ${
+            tanOnly
+              ? "bg-[var(--accent)] font-semibold text-white"
+              : "border border-[var(--border)] text-[var(--text)]"
+          }`}
+        >
+          只看谭成义
+          {tanCount > 0 ? ` ${tanCount}` : ""}
+        </button>
+      </div>
       <div className="mt-3 flex flex-wrap gap-2" role="tablist" aria-label="健身按部位筛选">
         {FITNESS_GROUPS.map((g) => {
-          const count = g.id === "全部" ? all.length : all.filter((it) => it.group === g.id).length;
+          const count = g.id === "全部" ? base.length : base.filter((it) => it.group === g.id).length;
           return (
             <button
               key={g.id}
