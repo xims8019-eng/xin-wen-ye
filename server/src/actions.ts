@@ -1344,6 +1344,55 @@ function isAlreadyAwardedReport(item: {
 }
 
 /**
+ * Course / learning platform hosts: a 夜校 item whose link IS one of
+ * these is a course page, not a news report, and is never caught by
+ * the night-school rule below.
+ */
+const COURSE_PLATFORM_HOSTS = [
+  "icourse163.org",
+  "smartedu.cn",
+  "xuetangx.com",
+  "coursera.org",
+  "futurelearn.com",
+  "edx.org",
+  "cylabacademy.org",
+  "overthewire.org",
+  "cl.cam.ac.uk",
+];
+
+/**
+ * Night-school NEWS reports with no course entry are not learning
+ * resources (user, 2026-11-24 v-round): the named case is the 广州日报
+ * 大洋网 report 《@广州青年：下班后去哪儿？来青年夜校打开新生活方式》
+ * (news.dayoo.com) — a lifestyle news piece about youth night schools
+ * that names no specific course, no sign-up entry and no free learning
+ * entry; it entered the column only because enrichment marked it
+ * needsApplication （可报名）, which reads as an actionable signal. The
+ * rule needs ALL THREE signals, so a real night-school course is
+ * untouched: (a) the title mentions 夜校； (b) NO course evidence at
+ * all — fee empty (null / 未说明）, no startHint, no deadline; (c) the
+ * link is NOT a course / learning platform page. The 7 curated anytime
+ * resources and the 7 AI courses all carry a fee and a startHint, so
+ * they never match.
+ */
+function isNightSchoolNewsWithoutCourseEntry(item: {
+  title: string;
+  fee?: string | null;
+  startHint?: string | null;
+  deadline?: string | null;
+  url?: string | null;
+}): boolean {
+  if (!/夜校/.test(item.title)) return false;
+  const fee = (item.fee ?? "").trim();
+  if (fee && !/未说明|未公布/.test(fee)) return false;
+  if (item.startHint && item.startHint.trim()) return false;
+  if (item.deadline) return false;
+  const host = item.url ? hostOf(item.url) : "";
+  if (host && COURSE_PLATFORM_HOSTS.some((d) => host === d || host.endsWith(`.${d}`))) return false;
+  return true;
+}
+
+/**
  * Learning-column rule (user, 2026-11-22): category 4 （学习与实践） keeps
  * ONLY what the user can still act on — skills competitions, free courses
  * or labs, language learning and language-exam registration that he can
@@ -1394,6 +1443,8 @@ function isLearningNotActionable(
     needsApplication?: boolean;
     url?: string | null;
     source?: string | null;
+    fee?: string | null;
+    startHint?: string | null;
   },
   todayStr: string,
 ): boolean {
@@ -1586,6 +1637,12 @@ function isLearningNotActionable(
   // drops awards-announced items; this covers the English/已发放
   // phrasings it missed.
   if (isAlreadyAwardedReport(item)) return true;
+  // Night-school news reports with no course entry (user, 2026-11-24
+  // v-round): a 夜校 lifestyle news piece with no fee, no startHint,
+  // no deadline and a non-course-platform link is pure news — out,
+  // even when enrichment marked it needsApplication. The 广州日报
+  // 大洋网 youth-night-school report is the named case.
+  if (isNightSchoolNewsWithoutCourseEntry(item)) return true;
   // No actionable signal at all → a pure news report, an advice essay or
   // a product/company story (the UN climate report, the AI-interviewer
   // news, the MIT program write-ups, the Workday integration story).
@@ -1956,6 +2013,7 @@ async function loadLearning(
           needsApplication: entry?.needsApplication ?? it.hint === "opportunities",
           url: it.url,
           source: it.source,
+          fee: entry?.fee ?? null,
         },
         todayStrL,
       )
@@ -6224,7 +6282,7 @@ export const Actions = {
 
   getLearning: defineAction({
     description:
-      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生； since 2026-11-23 the stage signals — middle school(s), 中小学， 初中， 高中生， 中六， JUPAS, DSE, 研究生/硕士研究生 — are matched against title + summary + points + audienceStage together, so an item whose stage is stated only in its body, e.g. an HKU undergraduate item naming JUPAS/中六 in its points, is excluded too), pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships), activity write-ups whose summary dates the event in the past (\"X月X日……举行/举办/召开\" with no replay and no sign-up, e.g. the 东湖大咖公开课 report), 专硕/学硕 master's-stage items (e.g. the 专硕 dorm-policy news), scholarships limited to one local school district's students or to high-school students only (school district / juniors and seniors / high school football / high school athlete / 学区 / 高中生， e.g. the St. Joseph scholarship and the People high-school athlete scholarship story) and expired intakes are all filtered out, so the list may honestly be empty. 自 2026-11-23 起另有两条规则：只有宣传博客、限时试听或无法核实免费范围的内容不进学习栏（课程卡必须直接链接到可免费学习的具体课程、练习或讲座回放；免费注册、仅证书收费的课程保留）；已发放/已颁发类报道不进可报名列表且 needsApplication 纠正为 false，只有官方页面确认报名已开放、报名免费且申请范围包含中国专科在读生时才列入，官方明确滚动报名或常年开放的项目即使没有截止日期也可保留。 HTML entities (&#…; and &…;, incl. double-encoded forms) are decoded in titles, points and summaries at ingest and on every read (2026-11-23), and an unenriched item's summary/relevance line is rebuilt from complete sentences of its own source summary — never cut mid-sentence and never a fabricated translation. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip. Since 2026-11-23 the list is split into two display groups via each item's group field: seven hand-verified free resources that can be started right now (CURATED_LEARNING_ANYTIME — 网络安全/英语公开课， authorised CTF practice, a Cambridge lecture recording; each with a startHint naming the first lesson or exercise) lead the items array as group=anytime, followed by pool courses/resources (also anytime); pool opportunities with a deadline in the next 30 days and a confirmed official entry are group=upcoming （近期可报名）; other opportunities keep group=null. The curated 近期可报名 set is empty this round — no official page was verified as explicitly open and free — so that group may honestly show its empty state. 自 2026-11-23 起，池内条目只有含真实可学内容（课程/讲座/回放/练习/实验）才进随时可学；纯政策新闻（征求意见稿、管理条例/办法类通知，如《教材管理条例（征求意见稿）》）由学习栏规则滤掉，永不为 group=anytime。自 2026-11-23 起另有 7 门人工核实的免费中文 AI 课程（CURATED_LEARNING_AI）作为持久精选随随时可学一同返回，每门带 aiTopic=true 供客户端的「AI 学习」话题筛选使用（能学什么/需要什么基础/从哪一课开始都写在卡上；全部免费学习、需免费注册、仅认证证书付费）；池内条目永不带 aiTopic。自 2026-11-23 起，Coursera 博客《Introducing AI Series on Coursera》（背后是 Coursera Plus 付费订阅、无单门免费带中文字幕课程、面向在职人士）由宣传博客规则从学习栏整个移除，不再保留随时可学位置；吴恩达《AI for Everyone》因只有非官方搬运、正版免费旁听与中文字幕未核实而不收录。",
+      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生； since 2026-11-23 the stage signals — middle school(s), 中小学， 初中， 高中生， 中六， JUPAS, DSE, 研究生/硕士研究生 — are matched against title + summary + points + audienceStage together, so an item whose stage is stated only in its body, e.g. an HKU undergraduate item naming JUPAS/中六 in its points, is excluded too), pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships), activity write-ups whose summary dates the event in the past (\"X月X日……举行/举办/召开\" with no replay and no sign-up, e.g. the 东湖大咖公开课 report), 专硕/学硕 master's-stage items (e.g. the 专硕 dorm-policy news), scholarships limited to one local school district's students or to high-school students only (school district / juniors and seniors / high school football / high school athlete / 学区 / 高中生， e.g. the St. Joseph scholarship and the People high-school athlete scholarship story) and expired intakes are all filtered out, so the list may honestly be empty. 自 2026-11-23 起另有两条规则：只有宣传博客、限时试听或无法核实免费范围的内容不进学习栏（课程卡必须直接链接到可免费学习的具体课程、练习或讲座回放；免费注册、仅证书收费的课程保留）；已发放/已颁发类报道不进可报名列表且 needsApplication 纠正为 false，只有官方页面确认报名已开放、报名免费且申请范围包含中国专科在读生时才列入，官方明确滚动报名或常年开放的项目即使没有截止日期也可保留。 HTML entities (&#…; and &…;, incl. double-encoded forms) are decoded in titles, points and summaries at ingest and on every read (2026-11-23), and an unenriched item's summary/relevance line is rebuilt from complete sentences of its own source summary — never cut mid-sentence and never a fabricated translation. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip. Since 2026-11-23 the list is split into two display groups via each item's group field: seven hand-verified free resources that can be started right now (CURATED_LEARNING_ANYTIME — 网络安全/英语公开课， authorised CTF practice, a Cambridge lecture recording; each with a startHint naming the first lesson or exercise) lead the items array as group=anytime, followed by pool courses/resources (also anytime); pool opportunities with a deadline in the next 30 days and a confirmed official entry are group=upcoming （近期可报名）; other opportunities keep group=null. The curated 近期可报名 set is empty this round — no official page was verified as explicitly open and free — so that group may honestly show its empty state. 自 2026-11-23 起，池内条目只有含真实可学内容（课程/讲座/回放/练习/实验）才进随时可学；纯政策新闻（征求意见稿、管理条例/办法类通知，如《教材管理条例（征求意见稿）》）由学习栏规则滤掉，永不为 group=anytime。自 2026-11-23 起另有 7 门人工核实的免费中文 AI 课程（CURATED_LEARNING_AI）作为持久精选随随时可学一同返回，每门带 aiTopic=true 供客户端的「AI 学习」话题筛选使用（能学什么/需要什么基础/从哪一课开始都写在卡上；全部免费学习、需免费注册、仅认证证书付费）；池内条目永不带 aiTopic。自 2026-11-23 起，Coursera 博客《Introducing AI Series on Coursera》（背后是 Coursera Plus 付费订阅、无单门免费带中文字幕课程、面向在职人士）由宣传博客规则从学习栏整个移除，不再保留随时可学位置；吴恩达《AI for Everyone》因只有非官方搬运、正版免费旁听与中文字幕未核实而不收录。自 2026-11-24 起另有一条确定性规则：标题含「夜校」、费用未说明、无 startHint、无截止日期且链接不在课程/学习平台域名上的条目，按纯新闻滤掉（如广州日报大洋网的青年夜校生活方式报道——没有任何具体课程、报名入口或免费学习入口）；带费用说明或开始提示的真实夜校课程不受影响。",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),

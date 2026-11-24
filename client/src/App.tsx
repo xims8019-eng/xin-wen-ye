@@ -1276,7 +1276,9 @@ function OverseasCategorySection({ category }: { category: "study" | "work_visa"
       {q.isPending ? (
         <p className="py-6 text-sm text-[var(--dim)]">正在追踪海外消息…</p>
       ) : items.length === 0 ? (
-        <p className="py-6 text-sm text-[var(--dim)]">暂时没取到这一栏的新消息，点刷新再试。</p>
+        <p className="py-6 text-sm text-[var(--dim)]">
+          {q.isError || !isStudy ? "暂时没取到这一栏的新消息，点刷新再试。" : "今天没有新的升学消息"}
+        </p>
       ) : (
         <>
           {visaItems.length > 0 && country === "全部国家" && stage === "全部阶段" ? (
