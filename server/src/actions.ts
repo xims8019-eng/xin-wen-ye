@@ -5567,11 +5567,18 @@ const CURATED_LEARNING_AI: CuratedLearningItem[] = [
 // 健身栏 (2026-11-23): twelve hand-verified free Chinese video tutorials
 // for basic exercises — 动作教学 only, deliberately NO training plan and
 // NO check-in feature. Persistent curated content (never rotates with
-// the daily fetch), served by getFitness. Every card carries exactly
-// six fields: 动作名称、所需器械、起始姿势、动作要点 (2–3)、一个常见
-// 错误、示范直达链接 (Bilibili 中文讲解； the plank video is an
-// English-narrated upload with Chinese subtitles, noted on its card).
+// the daily fetch), served by getFitness. Every card carries 动作名称、
+// 所需器械、起始姿势、动作要点 (2–3)、一个常见错误、示范直达链接
+// (Bilibili 中文讲解； the plank video is an English-narrated upload
+// with Chinese subtitles, noted on its card), plus the video's
+// 讲解者 / 标题 when the tutorial is by a verified athlete.
 // Groups: 胸 2、背 2、腿臀 3、肩 2、核心 3.
+// y-round (2026-11-24): three cards now link to 谭成义 tutorials
+// (哑铃推举、哑铃侧平举、哑铃划船); the other nine keep their existing
+// links as 过渡保留 and are flagged athletePending (选手教学待补充).
+// 谭成义's chest/leg compilations were checked by playback sampling and
+// do NOT contain 平板哑铃卧推 / 杠铃深蹲， so 哑铃卧推 and 杠铃深蹲 were
+// deliberately NOT switched to them.
 // ---------------------------------------------------------------------------
 
 const fitnessItemSchema = z.object({
@@ -5582,8 +5589,14 @@ const fitnessItemSchema = z.object({
   points: z.array(z.string()),
   commonMistake: z.string(),
   videoUrl: z.string(),
-  /** Note about the demo video itself (e.g. subtitle language); null when none. */
+  /** Note about the demo video itself (时间点 / 字幕 / 过渡保留说明); null when none. */
   videoNote: z.string().nullable().default(null),
+  /** 讲解者 of the linked tutorial; null when the card has no verified athlete tutorial. */
+  instructor: z.string().nullable().default(null),
+  /** Title of the linked tutorial video; null when not recorded. */
+  videoTitle: z.string().nullable().default(null),
+  /** True when no verified athlete tutorial has been found yet （选手教学待补充）. */
+  athletePending: z.boolean().default(false),
 });
 
 type FitnessItemData = z.infer<typeof fitnessItemSchema>;
@@ -5601,7 +5614,10 @@ const FITNESS_ITEMS: FitnessItemData[] = [
     ],
     commonMistake: "塌腰或撅臀，身体呈波浪线上下抖动",
     videoUrl: "https://www.bilibili.com/video/BV1vDaz6WEDA/",
-    videoNote: null,
+    videoNote: "现有链接为过渡保留，非选手教学",
+    instructor: null,
+    videoTitle: null,
+    athletePending: true,
   },
   {
     name: "哑铃卧推",
@@ -5615,7 +5631,10 @@ const FITNESS_ITEMS: FitnessItemData[] = [
     ],
     commonMistake: "肩胛骨松掉、耸肩推起，哑铃晃动、前臂歪斜",
     videoUrl: "https://www.bilibili.com/video/BV1mD421J7o3/",
-    videoNote: null,
+    videoNote: "现有链接为过渡保留，非选手教学",
+    instructor: null,
+    videoTitle: null,
+    athletePending: true,
   },
   {
     name: "引体向上",
@@ -5629,21 +5648,27 @@ const FITNESS_ITEMS: FitnessItemData[] = [
     ],
     commonMistake: "耸肩硬拉，或靠摆动借力、只做半程",
     videoUrl: "https://www.bilibili.com/video/BV1Guh667E4P/",
-    videoNote: null,
+    videoNote: "现有链接为过渡保留，非选手教学",
+    instructor: null,
+    videoTitle: null,
+    athletePending: true,
   },
   {
     name: "哑铃划船",
     group: "背",
     equipment: "哑铃（单臂版另需一张平板凳支撑）",
-    startPosition: "双手握哑铃，充分屈髋俯身，挺胸收背、腰背挺直、收紧核心",
+    startPosition: "一手撑哑铃架（或凳），另一手持一只哑铃，充分屈髋俯身，挺胸收背、腰背挺直、收紧核心",
     points: [
       "身体与地面夹角小于 45°",
       "呼气时肩胛骨后夹、手肘往后拉至大腿根部",
       "吸气缓慢放回，身体不上下摆动",
     ],
     commonMistake: "弯腰弓背、核心松掉，或靠身体摆动借力拉起",
-    videoUrl: "https://www.bilibili.com/video/BV1Va411o7Mc/",
-    videoNote: null,
+    videoUrl: "https://www.bilibili.com/video/BV1E8un61EVg/",
+    videoNote: "划船段约 01:07–12:57；反飞鸟约 13:00 开始",
+    instructor: "谭成义",
+    videoTitle: "哑铃划船，哑铃反飞鸟动作教学，希望对大家有所帮助！！",
+    athletePending: false,
   },
   {
     name: "杠铃深蹲",
@@ -5657,7 +5682,10 @@ const FITNESS_ITEMS: FitnessItemData[] = [
     ],
     commonMistake: "膝盖内扣，或塌腰弓背、蹲太低出现“骨盆眨眼”",
     videoUrl: "https://www.bilibili.com/video/BV1FU9LB5EGf/",
-    videoNote: null,
+    videoNote: "现有链接为过渡保留，非选手教学",
+    instructor: null,
+    videoTitle: null,
+    athletePending: true,
   },
   {
     name: "臀桥",
@@ -5671,7 +5699,10 @@ const FITNESS_ITEMS: FitnessItemData[] = [
     ],
     commonMistake: "腰部反弓、过度顶髋借力，或动作速度过快",
     videoUrl: "https://www.bilibili.com/video/BV1Jg4y1z7Nm/",
-    videoNote: null,
+    videoNote: "现有链接为过渡保留，非选手教学",
+    instructor: null,
+    videoTitle: null,
+    athletePending: true,
   },
   {
     name: "箭步蹲",
@@ -5685,7 +5716,10 @@ const FITNESS_ITEMS: FitnessItemData[] = [
     ],
     commonMistake: "步幅太小，或双脚踩在一条直线上像走钢丝，失去平衡",
     videoUrl: "https://www.bilibili.com/video/BV1Kz4y1D7R6/",
-    videoNote: null,
+    videoNote: "现有链接为过渡保留，非选手教学",
+    instructor: null,
+    videoTitle: null,
+    athletePending: true,
   },
   {
     name: "哑铃推举（坐姿哑铃推肩）",
@@ -5698,22 +5732,28 @@ const FITNESS_ITEMS: FitnessItemData[] = [
       "下落至眼睛位置即可，主动控制下放",
     ],
     commonMistake: "下落失控、被哑铃压下去，或推起时腰部大幅反弓借力",
-    videoUrl: "https://www.bilibili.com/video/BV1ym421M7DV/",
-    videoNote: null,
+    videoUrl: "https://www.bilibili.com/video/BV1csj36CEf9/",
+    videoNote: "21:16 开始（约 21:16–29:00）；卡片要点为编辑补充，非讲解者原话",
+    instructor: "谭成义",
+    videoTitle: "私教系列之肩部教学，希望对大家有所帮助！！",
+    athletePending: false,
   },
   {
     name: "哑铃侧平举",
     group: "肩",
     equipment: "哑铃一对（宜选轻重量）",
-    startPosition: "站立，双手各握一哑铃垂于体侧、掌心向内，微屈髋俯身、收紧核心",
+    startPosition: "站立，双手各握一哑铃垂于体侧、掌心向内，躯干挺直、微屈膝、收紧核心",
     points: [
       "保持肩高于肘、肘高于手，向两侧抬至与肩齐平",
       "匀速抬起，避免斜方肌代偿",
       "缓慢有控制地下放至大腿根部附近",
     ],
     commonMistake: "耸肩借力，或用大重量甩动哑铃",
-    videoUrl: "https://www.bilibili.com/video/BV13fnvzpE8o/",
-    videoNote: null,
+    videoUrl: "https://www.bilibili.com/video/BV128bX6eExV/",
+    videoNote: "单动作专讲，时长 07:59；起始姿势为编辑修正",
+    instructor: "谭成义",
+    videoTitle: "哑铃侧平举动作讲解，希望对大家有所帮助！！",
+    athletePending: false,
   },
   {
     name: "平板支撑",
@@ -5727,7 +5767,10 @@ const FITNESS_ITEMS: FitnessItemData[] = [
     ],
     commonMistake: "下背塌陷或屁股抬高，身体不在一条直线上",
     videoUrl: "https://www.bilibili.com/video/BV1mD4y1d7NF/",
-    videoNote: "英配中文字幕译制视频",
+    videoNote: "英配中文字幕译制视频；现有链接为过渡保留，非选手教学",
+    instructor: null,
+    videoTitle: null,
+    athletePending: true,
   },
   {
     name: "卷腹",
@@ -5741,7 +5784,10 @@ const FITNESS_ITEMS: FitnessItemData[] = [
     ],
     commonMistake: "双手抱头用力拉脖子借力，或幅度过大做成仰卧起坐、下背离地",
     videoUrl: "https://www.bilibili.com/video/BV18J4m1w76p/",
-    videoNote: null,
+    videoNote: "现有链接为过渡保留，非选手教学",
+    instructor: null,
+    videoTitle: null,
+    athletePending: true,
   },
   {
     name: "死虫式",
@@ -5755,7 +5801,10 @@ const FITNESS_ITEMS: FitnessItemData[] = [
     ],
     commonMistake: "腰部拱起离地、出现弹响髋，或动作过快失控",
     videoUrl: "https://www.bilibili.com/video/BV1tZ4y1q7qM/",
-    videoNote: null,
+    videoNote: "现有链接为过渡保留，非选手教学",
+    instructor: null,
+    videoTitle: null,
+    athletePending: true,
   },
 ];
 
@@ -6789,7 +6838,7 @@ export const Actions = {
 
   getFitness: defineAction({
     description:
-      "Returns the 健身 (fitness) column: twelve hand-verified free Chinese video tutorials for basic exercises, grouped 胸 (2) / 背 (2) / 腿臀 (3) / 肩 (2) / 核心 (3), covering bodyweight and common gym equipment. Each card carries exactly six fields — 动作名称、所需器械、起始姿势、动作要点 (2–3)、一个常见错误、示范直达链接 (Bilibili; the plank demo is English-narrated with Chinese subtitles, noted on the card). Persistent curated content: it never rotates with the daily refresh, and the column is 动作教学 only — deliberately no training plan and no check-in feature.",
+      "Returns the 健身 (fitness) column: twelve hand-verified free Chinese video tutorials for basic exercises, grouped 胸 (2) / 背 (2) / 腿臀 (3) / 肩 (2) / 核心 (3), covering bodyweight and common gym equipment. Each card carries 动作名称、所需器械、起始姿势、动作要点 (2–3)、一个常见错误、示范直达链接 (Bilibili; the plank demo is English-narrated with Chinese subtitles, noted on the card), plus 讲解者 and 视频标题 when the tutorial is a verified athlete's. Three cards （哑铃推举、哑铃侧平举、哑铃划船） link to 谭成义 tutorials; the other nine keep their existing links as 过渡保留 and carry athletePending=true （选手教学待补充）. Persistent curated content: it never rotates with the daily refresh, and the column is 动作教学 only — deliberately no training plan and no check-in feature.",
     request: z.object({}),
     response: z.object({
       items: z.array(fitnessItemSchema),

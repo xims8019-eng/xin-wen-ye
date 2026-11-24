@@ -751,7 +751,17 @@ function FitnessCard({ item }: { item: FitnessItem }) {
       <p className="flex flex-wrap items-center gap-2">
         <span className="font-headline text-[17px] font-bold leading-snug text-[var(--text)]">{item.name}</span>
         <span className="rounded-full bg-[var(--space-surface-alt)] px-2 py-0.5 text-xs font-medium text-[var(--text)]">{item.group}</span>
+        {item.athletePending ? (
+          <span className="rounded-full border border-[var(--border)] px-2 py-0.5 text-xs font-medium text-[var(--dim)]">选手教学待补充</span>
+        ) : null}
       </p>
+      {item.instructor || item.videoTitle ? (
+        <p className="mt-1.5 text-xs text-[var(--dim)]">
+          {item.instructor ? <>讲解者：{item.instructor}</> : null}
+          {item.instructor && item.videoTitle ? " · " : null}
+          {item.videoTitle ? <>《{item.videoTitle}》</> : null}
+        </p>
+      ) : null}
       <dl className="mt-2 space-y-1.5 text-sm leading-relaxed">
         <div>
           <dt className="inline font-medium text-[var(--text)]">所需器械：</dt>
@@ -777,7 +787,7 @@ function FitnessCard({ item }: { item: FitnessItem }) {
         </div>
       </dl>
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <ViewOriginalButton url={item.videoUrl} label="看示范视频" />
+        <ViewOriginalButton url={item.videoUrl} label="观看教学" />
         {item.videoNote ? <span className="text-xs text-[var(--dim)]">{item.videoNote}</span> : null}
       </div>
     </li>
@@ -833,7 +843,7 @@ function FitnessSection() {
     <section aria-label="健身栏目" className="mt-10 border-t-2 border-[var(--text)] pt-5">
       <h3 className="font-headline text-xl font-black text-[var(--text)]">健身 · 动作教学</h3>
       <p className="mt-1 text-xs text-[var(--dim)]">
-        只做动作教学：选一个动作，看懂起始姿势和要点，再打开示范视频跟着练。徒手与常见健身房器械，示范均为免费中文讲解视频。
+        只做动作教学：选一个动作，看懂起始姿势和要点，再打开示范视频跟着练。徒手与常见健身房器械，示范均为免费中文讲解视频。B 站播放时可能弹出登录框，关掉即可继续观看，无需登录，视频免费。
       </p>
       <FitnessBrowser />
     </section>
@@ -845,7 +855,7 @@ function FitnessView() {
     <section>
       <h3 className="font-headline text-lg font-bold text-[var(--text)]">健身 · 动作教学</h3>
       <p className="mt-1 text-xs text-[var(--dim)]">
-        只做动作教学，没有训练计划和打卡：按部位选一个动作，看懂怎么做，再打开示范视频开始练习。每张卡只有跟练要用的六项：器械、起始姿势、动作要点、常见错误和示范链接。
+        只做动作教学，没有训练计划和打卡：按部位选一个动作，看懂怎么做，再打开示范视频开始练习。每张卡只放跟练要用的内容：器械、起始姿势、动作要点、常见错误和示范链接，另有讲解者与视频标题。B 站播放时可能弹出登录框，关掉即可继续观看，无需登录，视频免费。
       </p>
       <FitnessBrowser />
     </section>
