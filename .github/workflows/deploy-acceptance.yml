@@ -1,0 +1,222 @@
+# 部署验收：每次生产部署成功后自动验收生产站。
+#
+# 触发机制（已核实，见 README“触发机制”一节）：
+# - Vercel 不在 GitHub 上创建 Deployment（deployments API 为空），所以
+#   deployment_status 事件不会触发；改用 status 事件：Vercel 每次部署完成
+#   都会在提交上贴一个 context=Vercel、state=success 的状态。
+# - 只验收 main 上的提交（预览部署不上生产，用 git 判定提交是否在 main 上）。
+# - 每次验收都查首页和主要栏目；本次提交改了筛选、文案或页面入口时，
+#   按改动文件映射到要验证的栏目（focus），并核对新增中文串是否出现在
+#   生产站实际下发的 JS 里。
+# - 提交号是否已上线：以 Vercel 的成功状态（该提交）+ 生产域名可访问并通过
+#   栏目检查为证据；应用内目前没有提交号/版本标记，直接证明是“未确认”
+#   （后续小改动建议见 README）。
+#
+# 通知：与每日巡检共用同一套 issue 状态机（scripts/report-autocheck.sh）。
+name: 部署验收（新闻页）
+
+on:
+  status: {}
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "要验收的提交 SHA（留空则验收 main 最新提交）"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      skip: ${{ steps.gate.outputs.skip }}
+      sha: ${{ steps.target.outputs.sha }}
+    steps:
+      - name: 确定验收提交
+        id: target
+        run: |
+          if [ "${{ github.event_name }}" = "status" ]; then
+            echo "sha=${{ github.event.sha }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ inputs.sha }}" ]; then
+            echo "sha=${{ inputs.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=main" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.target.outputs.sha }}
+          # 完整历史：要算提交与 main 的关系、以及本次提交的 diff。
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: 确认是生产部署
+        id: gate
+        run: |
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "status" ]; then
+            if [ "${{ github.event.context }}" != "Vercel" ] || [ "${{ github.event.state }}" != "success" ]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "不是 Vercel 上报的部署成功状态（context=${{ github.event.context }}，state=${{ github.event.state }}），跳过验收。"
+              exit 0
+            fi
+            SHA="${{ steps.target.outputs.sha }}"
+            git fetch origin main --quiet 2>/dev/null || true
+            if ! git merge-base --is-ancestor "$SHA" origin/main 2>/dev/null; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "提交 $SHA 不在 main 上，属预览部署，不上生产，跳过验收。"
+              exit 0
+            fi
+            echo "生产部署成功：提交 $SHA 在 main 上，开始验收。"
+          fi
+      - name: 计算本次改动涉及的范围
+        id: focus
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          SHA="${{ steps.target.outputs.sha }}"
+          if [ "$SHA" = "main" ]; then
+            SHA=$(git rev-parse HEAD)
+            echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          fi
+          # 本次提交自己的改动（与第一个父提交比）。
+          CHANGED=$(git diff --name-only "${SHA}^1" "${SHA}" 2>/dev/null || echo "")
+          echo "changed<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$CHANGED" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          FOCUS=""
+          for f in $CHANGED; do
+            case "$f" in
+              server/src/actions.ts) FOCUS="$FOCUS,actions" ;;
+              server/src/*) FOCUS="$FOCUS,server" ;;
+              client/src/*) FOCUS="$FOCUS,client" ;;
+              config/learning.json) FOCUS="$FOCUS,learning" ;;
+              config/*) FOCUS="$FOCUS,config" ;;
+              api/*|vercel.json) FOCUS="$FOCUS,infra" ;;
+              *.md|docs/*|DATA-PLAN.md) FOCUS="$FOCUS,docs" ;;
+              package.json|bun.lock) FOCUS="$FOCUS,deps" ;;
+              *) FOCUS="$FOCUS,other" ;;
+            esac
+          done
+          FOCUS=$(echo "$FOCUS" | sed 's/^,//')
+          echo "focus=$FOCUS" >> "$GITHUB_OUTPUT"
+          echo "本次改动涉及：${FOCUS:-（无）}"
+          echo "$CHANGED"
+      - name: 验收（像用户一样读各栏）
+        if: steps.gate.outputs.skip != 'true'
+        # 脚本在有异常时退出 1；是否变红由 report job 按“是否新开了 issue”决定。
+        continue-on-error: true
+        run: |
+          SHA="${{ steps.focus.outputs.sha || steps.target.outputs.sha }}"
+          node scripts/check-news-page.mjs --mode deploy \
+            --base-url https://xin-wen-ye.vercel.app \
+            --sha "$SHA" --focus "${{ steps.focus.outputs.focus }}" \
+            --out check-result.json --summary check-summary.md
+      - name: 核对新文案是否在生产站下发的 JS 里
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          SHA="${{ steps.focus.outputs.sha || steps.target.outputs.sha }}"
+          CHANGED="${{ steps.focus.outputs.changed }}"
+          FOCUS="${{ steps.focus.outputs.focus }}"
+          # 只改文档时没有页面改动可验证，直接记一笔。
+          if [ "$FOCUS" = "docs" ]; then
+            echo "本次只改文档，无页面改动可验证。" | tee -a check-summary.md
+            echo '{"checked":0,"found":0,"missing":[]}' > bundle-check.json
+            exit 0
+          fi
+          # 从 diff 里取新增的中文串（长度≥4，去重，最多 30 个）。
+          git diff "${SHA}^1" "${SHA}" -- client server 2>/dev/null \
+            | grep '^+' | grep -v '^+++' | sed 's/^+//' \
+            | grep -o '[一-鿿]\{4,\}' | sort -u | head -30 > /tmp/added-strings.txt || true
+          N=$(wc -l < /tmp/added-strings.txt | tr -d ' ')
+          if [ "$N" = "0" ]; then
+            echo "diff 里没有可比对的新增中文串，改为按栏目规则验收。" | tee -a check-summary.md
+            echo '{"checked":0,"found":0,"missing":[]}' > bundle-check.json
+            exit 0
+          fi
+          # 生产站首页当前引用的 chunk（用户实际看到的 JS）。
+          CHUNK=$(curl -s -m 30 https://xin-wen-ye.vercel.app/ | grep -o 'chunk-[A-Za-z0-9_-]*\.js' | head -1)
+          curl -s -m 60 "https://xin-wen-ye.vercel.app/${CHUNK}" -o /tmp/live-chunk.js
+          FOUND=0
+          MISSING_JSON=""
+          while IFS= read -r s; do
+            [ -z "$s" ] && continue
+            if grep -qF "$s" /tmp/live-chunk.js; then
+              FOUND=$((FOUND + 1))
+            else
+              MISSING_JSON="$MISSING_JSON,\"$s\""
+            fi
+          done < /tmp/added-strings.txt
+          MISSING_JSON=$(echo "$MISSING_JSON" | sed 's/^,//')
+          {
+            echo ""
+            echo "## 新文案在生产 JS 里的出现情况"
+            echo ""
+            echo "本次提交新增中文串 $N 个，生产站下发的 JS（$CHUNK）里找到 $FOUND 个。"
+            if [ -n "$MISSING_JSON" ]; then
+              echo "未找到的串可能是服务端文案或注释（不在客户端 JS 里），只作参考，不单独告警：$MISSING_JSON"
+            fi
+          } | tee -a check-summary.md
+          jq -n --argjson checked "$N" --argjson found "$FOUND" \
+            --argjson missing "[${MISSING_JSON}]" \
+            '{checked: $checked, found: $found, missing: $missing}' > bundle-check.json
+          # 客户端改了、新增串一个都没在生产 JS 里出现：可能是旧包还在服务，记一条警告。
+          case ",$FOCUS," in
+            *,client*,*)
+              if [ "$FOUND" = "0" ] && [ "$N" != "0" ]; then
+                jq '.warnings += ["本次改了客户端，但新增文案一个都没在生产站下发的 JS 里出现，可能是旧包还在服务，请人工核对。"]' \
+                  check-result.json > /tmp/result-patched.json && mv /tmp/result-patched.json check-result.json
+              fi
+              ;;
+          esac
+          if [ -f check-result.json ] && [ -f bundle-check.json ]; then
+            jq --slurpfile b bundle-check.json '.bundleStrings = $b[0]' \
+              check-result.json > /tmp/result-patched.json && mv /tmp/result-patched.json check-result.json
+          fi
+      - name: 写入 Job Summary
+        if: always() && steps.gate.outputs.skip != 'true'
+        run: |
+          if [ -f check-summary.md ]; then
+            cat check-summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "检查脚本没有产出摘要。" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: 上传运行记录
+        if: always() && steps.gate.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-acceptance-${{ github.run_id }}
+          path: |
+            check-result.json
+            check-summary.md
+            bundle-check.json
+          retention-days: 30
+          if-no-files-found: warn
+
+  report:
+    needs: check
+    if: always() && needs.check.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    # 与每日巡检共用一个并发组：开 issue / 关 issue 的操作串行，避免两个
+    # 检查同时跑时重复开 issue。
+    concurrency:
+      group: autocheck-report
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: 下载运行记录
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: deploy-acceptance-${{ github.run_id }}
+          path: .
+      - name: 按 issue 状态机通知
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/report-autocheck.sh check-result.json check-summary.md
