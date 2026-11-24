@@ -3557,6 +3557,42 @@ export function isVisaStatisticsOnlyNews(it: OverseasItem): boolean {
 }
 
 /**
+ * Policy items with no dated effective change do not pin
+ * (user, 2026-11-24 w-round): a kind="policy" item only earns a pinned
+ * visa card when it states a real rule change WITH a dated effective
+ * change. The named case is the 2026-08-18 EdSource commentary
+ * "Trump's visa policies are not deterring international students
+ * from California universities" (kind=policy, pinned=true on re-fetch):
+ * it describes a general situation ("foreign students find it harder
+ * to study in the US", "1,000+ visas revoked last year") but names no
+ * rule change and no effective date — decisionDateLabel, effectiveParts
+ * and effectiveWhen are all null. A dated signal is any of: a
+ * decisionDateLabel, an effectiveParts entry, or an effectiveWhen
+ * containing a year-month date (YYYY-MM-DD or YYYY 年 M 月...). The
+ * four good cards all carry one: Yale D/S (decisionDateLabel
+ * "法院裁决日期：2026 年 11 月 16 日"), NZ SGWV (effectiveWhen
+ * "2026 年 11 月 23 日起…"), Singapore MOM (effectiveParts
+ * "新申请：2027-01-01 起" / "续签：2028-01-01 起到期者"), Japan ISA
+ * (3 effectiveParts with 2026-10 / 2026-07-01 dates). kind=news items
+ * are never affected by this helper (statistics-only news is already
+ * covered by isVisaStatisticsOnlyNews).
+ */
+function isPolicyWithoutDatedEffectiveChange(item: {
+  kind?: string | null;
+  decisionDateLabel?: string | null;
+  effectiveParts?: string[] | null;
+  effectiveWhen?: string | null;
+}): boolean {
+  if (item.kind !== "policy") return false;
+  const hasDate = (s: string | null | undefined): boolean =>
+    !!s && /\d{4}\s*[-年]\s*\d{1,2}/.test(s);
+  if (hasDate(item.decisionDateLabel)) return false;
+  if ((item.effectiveParts ?? []).some((p) => hasDate(p))) return false;
+  if (hasDate(item.effectiveWhen)) return false;
+  return true;
+}
+
+/**
  * Merge the fixed visa zone: curated items always win; previously pinned
  * discoveries persist across refreshes; a newer item on the same
  * country+topic supersedes the older one; non-curated items older than a
@@ -3606,6 +3642,15 @@ async function mergePinnedVisaItems(ctx: Ctx, discovered: OverseasItem[]): Promi
     // already returned true above and are kind=policy besides, so this
     // check only ever reaches non-curated discoveries.
     if (isVisaStatisticsOnlyNews(it)) return false;
+    // Policy items with no dated effective change never pin (user rule,
+    // 2026-11-24): a kind=policy item earns the fixed zone only when it
+    // states a rule change WITH a dated effective change in
+    // decisionDateLabel / effectiveParts / effectiveWhen — the 2026-08-18
+    // EdSource commentary (all three null) was re-pinned by a refresh
+    // re-fetch. The item itself stays in the rotating pool; only the pin
+    // is withheld. Curated items already returned true above, and the
+    // four good cards carry dated signals besides.
+    if (isPolicyWithoutDatedEffectiveChange(it)) return false;
     // Retellings of events a curated item already covers never stay pinned.
     if (
       isDsRulingEventText(text) ||
@@ -5742,7 +5787,21 @@ function normalizeOverseas(raw: OverseasItem): z.infer<typeof overseasItemSchema
     blockedReason: it.blockedReason,
     official: it.official,
     visa: it.visa,
-    pinned: it.pinned,
+    // Read-time pin correction (user rule, 2026-11-24): a kind=policy item
+    // with no dated effective change never displays as pinned, even when a
+    // cached payload still carries pinned=true from an earlier refresh —
+    // the stored EdSource commentary is corrected on every read, without
+    // waiting for the next re-fetch or the pinned-store rewrite. The item
+    // itself stays in the pool. getDailyDigest reads through this same
+    // normalize, so the homepage digest shares the pin decision.
+    pinned:
+      it.pinned &&
+      !isPolicyWithoutDatedEffectiveChange({
+        kind,
+        decisionDateLabel: it.decisionDateLabel ?? null,
+        effectiveParts: it.effectiveParts ?? null,
+        effectiveWhen: it.effectiveWhen ?? null,
+      }),
     category,
     stage: it.stage ?? (kind === "policy" ? "general" : category === "study" ? "diploma" : "general"),
     kind,
