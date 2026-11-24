@@ -657,13 +657,23 @@ async function writeCache(ctx: Ctx, key: string, data: unknown): Promise<string>
   return now.toISOString();
 }
 
-/** Records the most recent refresh failure time (content itself stays on the previous version). */
-async function noteRefreshFailure(ctx: Ctx): Promise<void> {
+/**
+ * Records the most recent content-fetch failure time AND its source
+ * (分类:<id> / 订阅:<key> / 学习 / 江西专升本 / 海外 / 我关注的世界), so the
+ * page can say WHERE fetching last failed. This is a fetch failure, not
+ * an enrichment error — the two are tracked separately (see
+ * deriveStatusErrors). Content itself stays on the previous version.
+ */
+async function noteRefreshFailure(ctx: Ctx, source: string): Promise<void> {
   try {
     const db = ctx.db;
     const rows = await db.select().from(schema.cacheSnapshots).where(eq(schema.cacheSnapshots.key, "meta:status")).limit(1);
     const prev = rows[0] ? (JSON.parse(rows[0].payload) as { lastFailureAt?: string }) : {};
-    await writeCache(ctx, "meta:status", { ...prev, lastFailureAt: new Date().toISOString() });
+    await writeCache(ctx, "meta:status", {
+      ...prev,
+      lastFailureAt: new Date().toISOString(),
+      lastFailureSource: source,
+    });
   } catch {
     // bookkeeping only — never break a load over it
   }
@@ -915,41 +925,314 @@ function columnStatusesOf(prev: Record<string, unknown>): Record<string, ColumnS
   return (prev.columns as Record<string, ColumnStatus> | undefined) ?? {};
 }
 
-async function recordColumnStatus(ctx: Ctx, column: ColumnKey, patch: Partial<ColumnStatus>): Promise<void> {
+// --- Refresh status, corrected 2026-11-24 ---------------------------------
+// Rules (user request 2026-11-24 12:51): a top-level enrich error is NEVER
+// cleared by another column's success — only a success in the SAME column
+// retires it, and then it moves to `errorHistory` with its occurred and
+// recovered times kept. A top-level error whose column was never recorded
+// (legacy records predate the column tag) stays visible as history with
+// recovered = 未确认; getStatus matches it to a column only when its
+// enrichErrorAt equals that column's errorAt to the second (both were
+// written by the same call). "最近有内容更新" (a column's contentAt) is
+// never presented as "the 08:02 scheduled refresh completed": only a run
+// record written by the scheduled run itself proves that (see
+// recordRefreshRun / refreshAll `source`).
+export const STATUS_COLUMN_KEYS: readonly ColumnKey[] = ["learning", "jiangxi", "overseas"];
+
+export interface StatusHistoryError {
+  message: string;
+  column: ColumnKey | null;
+  errorAt: string | null;
+  recoveredAt: string | null;
+}
+
+export interface StatusCurrentError {
+  column: ColumnKey;
+  error: string;
+  errorAt: string | null;
+}
+
+export interface StatusLastError {
+  message: string;
+  column: ColumnKey | null;
+  errorAt: string | null;
+  /** true = the owning column later enriched successfully; false = still failing; null = cannot be determined from the records. */
+  recovered: boolean | null;
+  recoveredAt: string | null;
+}
+
+export type RefreshRunSource = "cron" | "manual" | "unknown";
+export type RefreshRunStatus = "running" | "completed" | "failed";
+export type RefreshColumnOutcome = "pending" | "ok" | "failed";
+/** Alias kept for the earlier self-hosted x-round draft. */
+export type RefreshRunColumnResult = RefreshColumnOutcome;
+
+export interface RefreshRunRecord {
+  startedAt: string;
+  finishedAt: string | null;
+  source: RefreshRunSource;
+  status: RefreshRunStatus;
+  columns: Record<ColumnKey, RefreshColumnOutcome>;
+}
+
+/** Alias kept for the earlier self-hosted x-round draft. */
+export type HistoryErrorEntry = StatusHistoryError;
+
+export const refreshRunSchema = z.object({
+  startedAt: z.string(),
+  finishedAt: z.string().nullable(),
+  source: z.enum(["cron", "manual", "unknown"]),
+  status: z.enum(["running", "completed", "failed"]),
+  columns: z.object({
+    learning: z.enum(["pending", "ok", "failed"]),
+    jiangxi: z.enum(["pending", "ok", "failed"]),
+    overseas: z.enum(["pending", "ok", "failed"]),
+  }),
+});
+
+function asColumnKey(v: unknown): ColumnKey | null {
+  return v === "learning" || v === "jiangxi" || v === "overseas" ? v : null;
+}
+
+function asColumn(v: unknown): ColumnKey | null {
+  return asColumnKey(v);
+}
+
+function asIsoOrNull(v: unknown): string | null {
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+
+/** Two timestamps from one writer call can differ by the time taken between the two reads; 1s absorbs that. */
+export function withinOneSecond(a: string | null, b: string | null): boolean {
+  if (!a || !b) return false;
+  const ta = Date.parse(a);
+  const tb = Date.parse(b);
+  if (Number.isNaN(ta) || Number.isNaN(tb)) return false;
+  return Math.abs(ta - tb) <= 1000;
+}
+
+export function parseRefreshRun(raw: unknown): RefreshRunRecord | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.startedAt !== "string" || r.startedAt.length === 0) return null;
+  const source = r.source;
+  if (source !== "cron" && source !== "manual" && source !== "unknown") return null;
+  const status = r.status;
+  if (status !== "running" && status !== "completed" && status !== "failed") return null;
+  if (r.finishedAt !== null && typeof r.finishedAt !== "string") return null;
+  const cols = r.columns as Record<string, unknown> | undefined;
+  if (!cols || typeof cols !== "object") return null;
+  const ok = (v: unknown): v is RefreshColumnOutcome => v === "ok" || v === "failed" || v === "pending";
+  if (!ok(cols.learning) || !ok(cols.jiangxi) || !ok(cols.overseas)) return null;
+  return {
+    startedAt: r.startedAt,
+    finishedAt: (r.finishedAt as string | null) ?? null,
+    source,
+    status,
+    columns: { learning: cols.learning, jiangxi: cols.jiangxi, overseas: cols.overseas },
+  };
+}
+
+/**
+ * Validates stored error-history entries: malformed entries are dropped,
+ * messages are capped at 500 chars, at most 5 entries are kept.
+ */
+export function parseHistoryErrors(raw: unknown): StatusHistoryError[] {
+  if (!Array.isArray(raw)) return [];
+  const out: StatusHistoryError[] = [];
+  for (const entry of raw) {
+    if (out.length >= 5) break;
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.message !== "string" || e.message.length === 0) continue;
+    out.push({
+      message: e.message.slice(0, 500),
+      column: asColumnKey(e.column),
+      errorAt: asIsoOrNull(e.errorAt),
+      recoveredAt: asIsoOrNull(e.recoveredAt),
+    });
+  }
+  return out;
+}
+
+export interface StatusErrorInput {
+  enrichError: string | null;
+  enrichErrorAt: string | null;
+  enrichErrorColumn: ColumnKey | null;
+  columns: Record<ColumnKey, ColumnStatus>;
+  errorHistory: HistoryErrorEntry[];
+}
+
+export interface DerivedStatusErrors {
+  currentErrors: Array<{ column: ColumnKey; error: string; errorAt: string | null }>;
+  lastError: {
+    message: string;
+    column: ColumnKey | null;
+    errorAt: string | null;
+    recovered: boolean | null;
+    recoveredAt: string | null;
+  } | null;
+}
+
+/**
+ * Pure derivation of the page's error picture from the stored status
+ * fields. currentErrors lists only columns whose own error is still set.
+ * lastError describes the top-level slot when one is present: its owning
+ * column comes from enrichErrorColumn, or — for older unlabelled
+ * records — from whichever column's errorAt matches enrichErrorAt
+ * within one second. recovered is true only when that same column's
+ * error has cleared AND its enrichAt is later than the error; false when
+ * the owning column still carries an error; null when no owner can be
+ * determined (an old record must never be reported as recovered on the
+ * strength of another column's success). With no top-level error, the
+ * newest history entry is the last error (recovered); failing that, the
+ * first current error (not recovered).
+ */
+export function deriveStatusErrors(input: StatusErrorInput): DerivedStatusErrors {
+  const { enrichError, enrichErrorAt, enrichErrorColumn, columns, errorHistory } = input;
+  const currentErrors: DerivedStatusErrors["currentErrors"] = (
+    ["learning", "jiangxi", "overseas"] as const
+  )
+    .filter((k) => !!columns[k].error)
+    .map((k) => ({ column: k, error: columns[k].error as string, errorAt: columns[k].errorAt }));
+  let lastError: DerivedStatusErrors["lastError"] = null;
+  if (enrichError) {
+    let matched: ColumnKey | null = enrichErrorColumn;
+    if (!matched) {
+      for (const k of ["learning", "jiangxi", "overseas"] as const) {
+        if (withinOneSecond(enrichErrorAt, columns[k].errorAt)) {
+          matched = k;
+          break;
+        }
+      }
+    }
+    let recovered: boolean | null = null;
+    let recoveredAt: string | null = null;
+    if (matched) {
+      const c = columns[matched];
+      if (c.error) {
+        recovered = false;
+      } else {
+        const errAt = enrichErrorAt ?? c.errorAt;
+        if (
+          c.enrichAt &&
+          errAt &&
+          !Number.isNaN(Date.parse(c.enrichAt)) &&
+          !Number.isNaN(Date.parse(errAt)) &&
+          Date.parse(c.enrichAt) > Date.parse(errAt)
+        ) {
+          recovered = true;
+          recoveredAt = c.enrichAt;
+        }
+      }
+    }
+    lastError = { message: enrichError, column: matched, errorAt: enrichErrorAt, recovered, recoveredAt };
+  } else if (errorHistory.length > 0) {
+    const h = errorHistory[0] as HistoryErrorEntry;
+    lastError = { message: h.message, column: h.column, errorAt: h.errorAt, recovered: true, recoveredAt: h.recoveredAt };
+  } else if (currentErrors.length > 0) {
+    const c = currentErrors[0] as { column: ColumnKey; error: string; errorAt: string | null };
+    lastError = { message: c.error, column: c.column, errorAt: c.errorAt, recovered: false, recoveredAt: null };
+  }
+  return { currentErrors, lastError };
+}
+
+/** Writes a refresh-run record into meta:status. A cron-sourced run also
+ * becomes lastCronRun — the only record the homepage may cite as proof that
+ * a scheduled 08:02 run completed. A run record is written at start
+ * (status "running") and again at finish, so an interrupted run stays
+ * visible as "running" instead of silently looking complete. */
+async function recordRefreshRun(ctx: Ctx, run: RefreshRunRecord): Promise<void> {
   try {
     const prev = await readMetaStatus(ctx);
-    const columns = columnStatusesOf(prev);
-    columns[column] = { ...(columns[column] ?? { ...EMPTY_COLUMN_STATUS }), ...patch };
-    await writeCache(ctx, "meta:status", { ...prev, columns });
+    const next: Record<string, unknown> = { ...prev, lastRefreshRun: run };
+    if (run.source === "cron") next.lastCronRun = run;
+    await writeCache(ctx, "meta:status", next);
   } catch {
-    // bookkeeping only — never break a load over it
+    // bookkeeping only — never break a refresh over it
   }
 }
 
-/** A batch enriched successfully: record the success time; a previous error is marked recovered. */
+/**
+ * A batch enriched successfully: record the success time (enrichAt). If
+ * this column had an uncleared error, the error is retired into
+ * errorHistory with its recovery time and the column is marked
+ * recovered. The top-level enrichError slot is retired (and cleared)
+ * ONLY when it belongs to this column — its enrichErrorColumn matches,
+ * or its enrichErrorAt is within one second of this column's errorAt
+ * (the two timestamps of one writer call). When the top-level error
+ * belongs to another column, only this column's own error enters the
+ * history and the top-level slot is left exactly as it was: one column's
+ * success never "recovers" another column's error.
+ */
 async function markColumnEnrichSuccess(ctx: Ctx, column: ColumnKey): Promise<void> {
   try {
     const prev = await readMetaStatus(ctx);
     const columns = columnStatusesOf(prev);
     const cur = columns[column] ?? { ...EMPTY_COLUMN_STATUS };
+    const now = new Date().toISOString();
     columns[column] = {
       ...cur,
-      enrichAt: new Date().toISOString(),
+      enrichAt: now,
       ...(cur.error ? { error: null, recovered: true } : {}),
     };
-    await writeCache(ctx, "meta:status", { ...prev, columns });
+    const next: Record<string, unknown> = { ...prev, columns };
+    if (cur.error) {
+      const history = parseHistoryErrors(prev.errorHistory);
+      const topMessage =
+        typeof prev.enrichError === "string" && prev.enrichError ? prev.enrichError : null;
+      const topAt = asIsoOrNull(prev.enrichErrorAt);
+      const topColumn = asColumnKey(prev.enrichErrorColumn);
+      if (topMessage !== null && (topColumn === column || withinOneSecond(topAt, cur.errorAt))) {
+        history.unshift({
+          message: topMessage.slice(0, 500),
+          column,
+          errorAt: topAt ?? cur.errorAt,
+          recoveredAt: now,
+        });
+        next.enrichError = null;
+        next.enrichErrorAt = null;
+        next.enrichErrorColumn = null;
+      } else {
+        history.unshift({
+          message: cur.error.slice(0, 500),
+          column,
+          errorAt: cur.errorAt,
+          recoveredAt: now,
+        });
+      }
+      next.errorHistory = history.slice(0, 5);
+    }
+    await writeCache(ctx, "meta:status", next);
   } catch {
     // bookkeeping only
   }
 }
 
-/** A batch's enrichment failed: record the latest error and clear the recovered flag. */
+/**
+ * A batch's enrichment failed: record the error on the column itself AND
+ * in the top-level slot in the same write, with ONE shared timestamp and
+ * the column label (enrichErrorColumn), so getStatus can later tell
+ * which column the top-level error belongs to.
+ */
 async function markColumnEnrichError(ctx: Ctx, column: ColumnKey, e: unknown): Promise<void> {
-  await recordColumnStatus(ctx, column, {
-    error: (e instanceof Error ? `${e.name}: ${e.message}` : String(e)).slice(0, 500),
-    errorAt: new Date().toISOString(),
-    recovered: false,
-  });
+  try {
+    const prev = await readMetaStatus(ctx);
+    const columns = columnStatusesOf(prev);
+    const cur = columns[column] ?? { ...EMPTY_COLUMN_STATUS };
+    const message = (e instanceof Error ? `${e.name}: ${e.message}` : String(e)).slice(0, 500);
+    const now = new Date().toISOString();
+    columns[column] = { ...cur, error: message, errorAt: now, recovered: false };
+    await writeCache(ctx, "meta:status", {
+      ...prev,
+      enrichError: message,
+      enrichErrorAt: now,
+      enrichErrorColumn: column,
+      columns,
+    });
+  } catch {
+    // bookkeeping only — never break a load over it
+  }
 }
 
 /**
@@ -1093,7 +1376,7 @@ async function loadCategory(ctx: Ctx, categoryId: string, force: boolean): Promi
     const asOf = await writeCache(ctx, key, items);
     return { items, asOf };
   } catch {
-    await noteRefreshFailure(ctx);
+    await noteRefreshFailure(ctx, `分类:${cat.id}`);
     const stale = await readCacheStale<FeedItem[]>(ctx, key);
     if (stale) return { items: stale.data, asOf: stale.asOf };
     return { items: [], asOf: new Date().toISOString() };
@@ -1119,7 +1402,7 @@ async function loadFeedItems(
     await writeCache(ctx, key, items);
     return { items, error: null };
   } catch {
-    await noteRefreshFailure(ctx);
+    await noteRefreshFailure(ctx, `订阅:${feedKey}`);
     const stale = await readCacheStale<FeedItem[]>(ctx, key);
     if (stale) return { items: stale.data, error: null };
     return { items: [], error: "这个订阅源暂时连不上" };
@@ -1809,7 +2092,7 @@ async function loadLearning(
   }
 
   if (candidates.length === 0) {
-    await noteRefreshFailure(ctx);
+    await noteRefreshFailure(ctx, "学习");
     const stale = await readCacheStale<LearningItem[]>(ctx, "learning:all:v2");
     if (stale) return { items: stale.data, asOf: stale.asOf };
     return { items: [], asOf: new Date().toISOString() };
@@ -1881,16 +2164,22 @@ async function loadLearning(
       const prev = rows[0] ? (JSON.parse(rows[0].payload) as Record<string, unknown>) : {};
       const columns = (prev.columns as Record<string, ColumnStatus> | undefined) ?? {};
       const cur = columns.learning ?? { ...EMPTY_COLUMN_STATUS };
+      // One timestamp for both stamps, plus the column tag: a later reader
+      // must be able to tell that this top-level error IS the learning
+      // column's error of this batch (2026-11-24 status fix).
+      const message = (e instanceof Error ? `${e.name}: ${e.message}` : String(e)).slice(0, 500);
+      const now = new Date().toISOString();
       columns.learning = {
         ...cur,
-        error: (e instanceof Error ? `${e.name}: ${e.message}` : String(e)).slice(0, 500),
-        errorAt: new Date().toISOString(),
+        error: message,
+        errorAt: now,
         recovered: false,
       };
       await writeCache(ctx, "meta:status", {
         ...prev,
-        enrichError: (e instanceof Error ? `${e.name}: ${e.message}` : String(e)).slice(0, 500),
-        enrichErrorAt: new Date().toISOString(),
+        enrichError: message,
+        enrichErrorAt: now,
+        enrichErrorColumn: "learning",
         enrichBatch: batchStart,
         columns,
       });
@@ -2619,7 +2908,7 @@ async function loadJiangxi(
       const asOf = await writeCache(ctx, "jiangxi:all:v5", [] as JiangxiItem[]);
       return { items: [], asOf };
     }
-    await noteRefreshFailure(ctx);
+    await noteRefreshFailure(ctx, "江西专升本");
     const stale = await readCacheStale<JiangxiItem[]>(ctx, "jiangxi:all:v5");
     if (stale) return { items: stale.data, asOf: stale.asOf };
     return { items: [], asOf: new Date().toISOString() };
@@ -4122,7 +4411,7 @@ async function loadOverseas(
     .slice(0, 32);
 
   if (deduped.length === 0) {
-    await noteRefreshFailure(ctx);
+    await noteRefreshFailure(ctx, "海外");
     const stale = await readCacheStale<OverseasItem[]>(ctx, "overseas:all:v20");
     if (stale) return { items: overseasHomepageItems(stale.data), asOf: stale.asOf };
     // Even with no fresh search results, the fixed visa zone stands.
@@ -4181,16 +4470,22 @@ async function loadOverseas(
       const prev = rows[0] ? (JSON.parse(rows[0].payload) as Record<string, unknown>) : {};
       const columns = (prev.columns as Record<string, ColumnStatus> | undefined) ?? {};
       const cur = columns.overseas ?? { ...EMPTY_COLUMN_STATUS };
+      // One timestamp for both stamps, plus the column tag: a later reader
+      // must be able to tell that this top-level error IS the overseas
+      // column's error (2026-11-24 status fix).
+      const message = `海外栏摘要：${(e instanceof Error ? `${e.name}: ${e.message}` : String(e)).slice(0, 400)}`;
+      const now = new Date().toISOString();
       columns.overseas = {
         ...cur,
-        error: `海外栏摘要：${(e instanceof Error ? `${e.name}: ${e.message}` : String(e)).slice(0, 400)}`,
-        errorAt: new Date().toISOString(),
+        error: message,
+        errorAt: now,
         recovered: false,
       };
       await writeCache(ctx, "meta:status", {
         ...prev,
-        enrichError: `海外栏摘要：${(e instanceof Error ? `${e.name}: ${e.message}` : String(e)).slice(0, 400)}`,
-        enrichErrorAt: new Date().toISOString(),
+        enrichError: message,
+        enrichErrorAt: now,
+        enrichErrorColumn: "overseas",
         columns,
       });
     } catch {
@@ -4601,7 +4896,7 @@ async function loadMyWorld(ctx: Ctx, force: boolean): Promise<{ daily: WorldItem
   const weekly = merged.filter((it) => it.weekly).sort(byTime).slice(0, 9);
   const all = merged.sort(byTime).slice(0, 40);
   if (all.length === 0) {
-    await noteRefreshFailure(ctx);
+    await noteRefreshFailure(ctx, "我关注的世界");
     const stale = await readCacheStale<{ daily: WorldItem[]; weekly: WorldItem[]; all: WorldItem[] }>(ctx, "world:all:v3");
     if (stale) return { ...stale.data, asOf: stale.asOf };
     return { daily: [], weekly: [], all: [], asOf: new Date().toISOString() };
@@ -6147,14 +6442,26 @@ export const Actions = {
     },
   }),
 
+  // --- getStatus response shapes for the 2026-11-24 status fix -----------
+  // currentErrors: errors still open, per column — the ONLY basis for a
+  // "currently failing" banner. lastError: the most recent enrich error
+  // overall; recovered is true only on a same-column success, false while
+  // open, and null (未确认) when the record predates the column tag and
+  // cannot be matched to any column. errorHistory: retired errors with
+  // occurred + recovered times. lastRefreshRun / lastCronRun: run records
+  // written by refreshAll itself; only lastCronRun proves a scheduled
+  // 08:02 run completed — a column's contentAt never proves that.
   getStatus: defineAction({
     description:
-      "Returns the last successful refresh time across all caches and the daily refresh schedule, plus per-column status (content time, enrichment success time, latest enrichment error and whether it has recovered) so the page can answer which column updated.",
+      "Returns the last successful refresh time across all caches and the daily refresh schedule, plus per-column status (content time, enrichment success time, latest enrichment error and whether it has recovered), the currently-open errors per column, the most recent error with its recovery state (null = unconfirmed), retired error history, and the last refresh run / last scheduled (cron) run records — so the page can answer whether anything is still failing, whether the last error recovered, and whether the last 08:02 scheduled refresh is confirmed complete.",
     request: z.object({}),
     response: z.object({
       lastUpdatedAt: z.string().nullable(),
       lastFailureAt: z.string().nullable(),
+      lastFailureSource: z.string().nullable(),
       enrichError: z.string().nullable(),
+      enrichErrorAt: z.string().nullable(),
+      enrichErrorColumn: z.enum(["learning", "jiangxi", "overseas"]).nullable(),
       refreshTimeLabel: z.string(),
       refreshTimezone: z.string(),
       refreshScheduleLabel: z.string(),
@@ -6163,13 +6470,45 @@ export const Actions = {
         jiangxi: columnStatusSchema,
         overseas: columnStatusSchema,
       }),
+      currentErrors: z.array(
+        z.object({
+          column: z.enum(["learning", "jiangxi", "overseas"]),
+          error: z.string(),
+          errorAt: z.string().nullable(),
+        }),
+      ),
+      lastError: z
+        .object({
+          message: z.string(),
+          column: z.enum(["learning", "jiangxi", "overseas"]).nullable(),
+          errorAt: z.string().nullable(),
+          recovered: z.boolean().nullable(),
+          recoveredAt: z.string().nullable(),
+        })
+        .nullable(),
+      errorHistory: z.array(
+        z.object({
+          message: z.string(),
+          column: z.enum(["learning", "jiangxi", "overseas"]).nullable(),
+          errorAt: z.string().nullable(),
+          recoveredAt: z.string().nullable(),
+        }),
+      ),
+      lastRefreshRun: refreshRunSchema.nullable(),
+      lastCronRun: refreshRunSchema.nullable(),
     }),
     async handler(ctx) {
       const db = ctx.db;
       const rows = await db.select().from(schema.cacheSnapshots);
       let max: Date | null = null;
       let lastFailureAt: string | null = null;
+      let lastFailureSource: string | null = null;
       let enrichError: string | null = null;
+      let enrichErrorAt: string | null = null;
+      let enrichErrorColumn: ColumnKey | null = null;
+      let errorHistory: HistoryErrorEntry[] = [];
+      let lastRefreshRun: RefreshRunRecord | null = null;
+      let lastCronRun: RefreshRunRecord | null = null;
       const columns: Record<ColumnKey, ColumnStatus> = {
         learning: { ...EMPTY_COLUMN_STATUS },
         jiangxi: { ...EMPTY_COLUMN_STATUS },
@@ -6186,11 +6525,23 @@ export const Actions = {
           try {
             const meta = JSON.parse(r.payload) as {
               lastFailureAt?: string;
+              lastFailureSource?: string;
               enrichError?: string;
+              enrichErrorAt?: string;
+              enrichErrorColumn?: string;
+              errorHistory?: unknown;
+              lastRefreshRun?: unknown;
+              lastCronRun?: unknown;
               columns?: Record<string, ColumnStatus>;
             };
             lastFailureAt = meta.lastFailureAt ?? null;
+            lastFailureSource = typeof meta.lastFailureSource === "string" ? meta.lastFailureSource : null;
             enrichError = meta.enrichError ?? null;
+            enrichErrorAt = meta.enrichErrorAt ?? null;
+            enrichErrorColumn = asColumn(meta.enrichErrorColumn);
+            errorHistory = parseHistoryErrors(meta.errorHistory);
+            lastRefreshRun = parseRefreshRun(meta.lastRefreshRun);
+            lastCronRun = parseRefreshRun(meta.lastCronRun);
             for (const k of ["learning", "jiangxi", "overseas"] as const) {
               const saved = meta.columns?.[k];
               if (saved) {
@@ -6216,14 +6567,33 @@ export const Actions = {
         if (r.key.includes(":enrich:") || r.key.includes(":dropped:")) continue;
         if (!max || r.fetchedAt.getTime() > max.getTime()) max = r.fetchedAt;
       }
+      // Currently-open errors + most recent error (see deriveStatusErrors):
+      // only a column's own open error counts as "currently failing"; the
+      // stale top-level enrichError is history, matched to a column only by
+      // its timestamp, and recovered only on a same-column later success.
+      const { currentErrors, lastError } = deriveStatusErrors({
+        enrichError,
+        enrichErrorAt,
+        enrichErrorColumn,
+        columns,
+        errorHistory,
+      });
       return {
         lastUpdatedAt: max ? max.toISOString() : null,
         lastFailureAt,
+        lastFailureSource,
         enrichError,
+        enrichErrorAt,
+        enrichErrorColumn,
         refreshTimeLabel: "08:02",
         refreshTimezone: "Asia/Shanghai",
         refreshScheduleLabel: "每天 08:02 · Asia/Shanghai (UTC+8)",
         columns,
+        currentErrors,
+        lastError,
+        errorHistory,
+        lastRefreshRun,
+        lastCronRun,
       };
     },
   }),
@@ -6778,10 +7148,11 @@ export const Actions = {
   }),
 
   refreshAll: defineAction({
-    description: "Refreshes every cache: the five homepage categories, the learning column, all news categories, the platform hot lists, and every followed feed. Used by the daily schedule and first-load warm-up.",
-    request: z.object({}),
+    description:
+      "Refreshes every cache: the five homepage categories, the learning column, all news categories, the platform hot lists, and every followed feed. Used by the daily schedule and first-load warm-up. `source` names the caller (cron = the scheduled 08:02 run, manual = the homepage button, unknown = anything else) and is recorded with the run, so getStatus can tell a confirmed scheduled run apart from a manual refresh or a plain column update.",
+    request: z.object({ source: z.enum(["cron", "manual", "unknown"]).default("unknown") }),
     response: z.object({ ok: z.literal(true), refreshedAt: z.string() }),
-    async handler(ctx): Promise<{ ok: true; refreshedAt: string }> {
+    async handler(ctx, args): Promise<{ ok: true; refreshedAt: string }> {
       // One shared run budget for the whole execution (p-round, 2026-11-23):
       // 55s, targeting the 60s self-hosted function cap, with time reserved
       // for cache writes. Each column's enrichment loop gates every batch
@@ -6789,38 +7160,85 @@ export const Actions = {
       // so a slow learning column can no longer starve the columns after
       // it — unfinished items stay fresh and the next run resumes them.
       const budget = newRunBudget();
-      // Column isolation: a slow or failing column must not block the
-      // others — each still gets its own refresh chance and writes its own
-      // cache. Failures are recorded per column (see getStatus) and by
-      // noteRefreshFailure inside the loaders; the run still reports ok so
-      // one column's failure cannot hide the others' fresh caches.
-      const runColumn = async (fn: () => Promise<unknown>): Promise<void> => {
-        try {
-          await fn();
-        } catch {
-          // isolated — the next column still runs
-        }
+      // Run record (2026-11-24 status fix): written at start ("running",
+      // per-column "pending") and again at finish, so the homepage can
+      // prove — or honestly say it cannot prove — that a scheduled 08:02
+      // run completed. A column's contentAt alone never proves that: it
+      // can also come from a manual refresh or a TTL-expired page open.
+      const startedAt = new Date().toISOString();
+      const runColumns: Record<ColumnKey, RefreshRunColumnResult> = {
+        learning: "pending",
+        jiangxi: "pending",
+        overseas: "pending",
       };
-      // Learning first: its model enrichment is the slowest, most
-      // deadline-sensitive step, so it must not queue behind nine sequential
-      // category fetches (that ordering is what starved it of inference time).
-      await runColumn(() => loadLearning(ctx, true, budget));
-      // The other two model-enriched columns also run one after another,
-      // never in parallel with each other (2026-11-23 pacing — see
-      // completeEnrichment); 我关注的世界 and the hot lists make no model
-      // calls and still load together. Every column keeps writing its own
-      // cache the moment it finishes.
-      await runColumn(() => loadJiangxi(ctx, true, budget));
-      await runColumn(() => loadOverseas(ctx, true, budget));
-      await runColumn(() => Promise.all([loadMyWorld(ctx, true), loadHotLists(ctx, true)]));
-      await runColumn(() => Promise.all(CATEGORIES.map((cat) => loadCategory(ctx, cat.id, true))));
-      const db = ctx.db;
-      const subs = await db.select().from(schema.subscriptions);
-      for (const s of subs) {
-        await runColumn(() => loadFeedItems(ctx, s.feedKey, s.name, s.url, true));
+      await recordRefreshRun(ctx, {
+        startedAt,
+        finishedAt: null,
+        source: args.source,
+        status: "running",
+        columns: { ...runColumns },
+      });
+      let runStatus: "completed" | "failed" = "completed";
+      try {
+        // Column isolation: a slow or failing column must not block the
+        // others — each still gets its own refresh chance and writes its own
+        // cache. Failures are recorded per column (see getStatus) and by
+        // noteRefreshFailure inside the loaders; the run still reports ok so
+        // one column's failure cannot hide the others' fresh caches.
+        const runColumn = async (fn: () => Promise<unknown>): Promise<boolean> => {
+          try {
+            await fn();
+            return true;
+          } catch {
+            // isolated — the next column still runs
+            return false;
+          }
+        };
+        // Learning first: its model enrichment is the slowest, most
+        // deadline-sensitive step, so it must not queue behind nine sequential
+        // category fetches (that ordering is what starved it of inference time).
+        runColumns.learning = (await runColumn(() => loadLearning(ctx, true, budget))) ? "ok" : "failed";
+        // The other two model-enriched columns also run one after another,
+        // never in parallel with each other (2026-11-23 pacing — see
+        // completeEnrichment); 我关注的世界 and the hot lists make no model
+        // calls and still load together. Every column keeps writing its own
+        // cache the moment it finishes.
+        runColumns.jiangxi = (await runColumn(() => loadJiangxi(ctx, true, budget))) ? "ok" : "failed";
+        runColumns.overseas = (await runColumn(() => loadOverseas(ctx, true, budget))) ? "ok" : "failed";
+        await runColumn(() => Promise.all([loadMyWorld(ctx, true), loadHotLists(ctx, true)]));
+        await runColumn(() => Promise.all(CATEGORIES.map((cat) => loadCategory(ctx, cat.id, true))));
+        const db = ctx.db;
+        const subs = await db.select().from(schema.subscriptions);
+        for (const s of subs) {
+          await runColumn(() => loadFeedItems(ctx, s.feedKey, s.name, s.url, true));
+        }
+        // Run status (2026-11-24, Muse v62 rule): the run is "failed" when
+        // any of the three enriched columns failed, even though the other
+        // columns still wrote their caches (column isolation above).
+        runStatus =
+          runColumns.learning === "failed" ||
+          runColumns.jiangxi === "failed" ||
+          runColumns.overseas === "failed"
+            ? "failed"
+            : "completed";
+        ctx.invalidateQueries();
+        return { ok: true, refreshedAt: new Date().toISOString() };
+      } catch (e) {
+        runStatus = "failed";
+        throw e;
+      } finally {
+        // The finish record is written even when an unexpected error escapes
+        // the isolated columns (Muse v62 leaves lastRefreshRun "running" in
+        // that case; the self-hosted copy records it "failed" instead, so an
+        // interrupted run is never mistaken for one still in progress).
+        await recordRefreshRun(ctx, {
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          source: args.source,
+          status: runStatus,
+          columns: { ...runColumns },
+        });
       }
-      ctx.invalidateQueries();
-      return { ok: true, refreshedAt: new Date().toISOString() };
     },
   }),
 };

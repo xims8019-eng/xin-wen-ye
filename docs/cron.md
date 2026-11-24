@@ -43,6 +43,17 @@ Vercel Cron（`vercel.json`）：
 
 注意：GitHub Actions 和 Vercel 的 cron 都是 UTC，北京时间 08:02 对应 UTC 00:02，所以写 `2 0 * * *`。夏令时不影响中国时区。
 
+## 刷新状态记录（2026-11-24 修正）
+
+`getStatus` 回答三个问题，答不出就写「未确认」，不猜：
+
+- **当前还有没有错误**：只看各栏目自己的 `columns.*.error`（`currentErrors`）。顶层 `enrichError` 是「最近一次富化错误」的旧槽位，成功后不会被清掉，不能当作当前错误；同栏目后来成功后它归入 `errorHistory`（保留发生时间与恢复时间），只有同一栏目的成功才能让它退休，别栏的成功不算。
+- **最近一次错误是否恢复**：`lastError.recovered`——`true` 只有同一栏目后来成功整理过；`false` 是仍 open；`null` 是记录太旧、没有栏目标签也对不上任何栏目的 `errorAt`，写「恢复情况未确认」。2026-11-24 之前写下的顶层旧错（如生产站 Gemini 503、Muse 版 "Web artifact inference timed out."）都没有栏目标签，`enrichErrorAt` 若与某栏 `errorAt` 秒级一致才能对应上，否则就是未确认。
+- **最近一次 08:02 定时任务能否确认完成**：只看 `lastCronRun`——由定时任务自己在 `refreshAll` 开始（`running`）与结束（`completed`/`failed`，逐栏 `ok`/`failed`）时写入。某栏 `contentAt` 更新过只能证明该栏更新过（手动「刷新全部」或缓存过期后打开页面都会更新），不能写成定时任务已完成。`refreshAll` 带 `source` 参数：`cron` / `manual` / `unknown`，首页按钮传 `manual`，Vercel 定时入口（`api/cron.ts`）传 `cron`。
+- **抓取失败**：`noteRefreshFailure` 现在带来源（`分类:<id>` / `订阅:<key>` / 学习 / 江西专升本 / 海外 / 我关注的世界），`lastFailureAt` + `lastFailureSource` 一起返回；没有来源的旧记录只写「未确认来源」。
+
+已办（2026-11-24）：Muse 托管的定时任务 `xin-wen-ye-daily-refresh`（`docs/muse-cron-original.yaml`）调 `refreshAll` 时的参数已由协调员改成 `{"source": "cron"}`，下一个 08:02 之后 `lastCronRun` 才会出现；在此之前 Muse 版首页的「最近一次定时任务」诚实显示未确认。
+
 ## 页面内的缓存时长（与定时任务是两回事）
 
 | 内容 | 缓存 | 说明 |

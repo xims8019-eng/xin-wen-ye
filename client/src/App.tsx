@@ -66,34 +66,55 @@ function relativeTime(iso: string | null): string {
   return new Date(iso).toLocaleDateString("zh-CN");
 }
 
+// All times on this page are Beijing time (Asia/Shanghai, UTC+8), stated
+// explicitly instead of relying on the viewer's local timezone (2026-11-24
+// status fix — the old code used local-time getters, so the same timestamp
+// could render in a different timezone on another device).
+const BEIJING_TZ = "Asia/Shanghai";
+
+function beijingParts(date: Date): { year: string; month: string; day: string; hour: string; minute: string } {
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: BEIJING_TZ,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return { year: get("year"), month: get("month"), day: get("day"), hour: get("hour"), minute: get("minute") };
+}
+
 function clockTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+  const p = beijingParts(d);
+  return `${p.hour}:${p.minute}`;
 }
 
 function formatPubTime(iso: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  return `${d.getMonth() + 1}月${d.getDate()}日 ${hh}:${mm}`;
+  const p = beijingParts(d);
+  return `${p.month}月${p.day}日 ${p.hour}:${p.minute}`;
 }
 
 function formatFullDateTime(iso: string | null): string {
   if (!iso) return "尚未更新";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "尚未更新";
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${hh}:${mm}`;
+  const p = beijingParts(d);
+  return `${p.year}年${p.month}月${p.day}日 ${p.hour}:${p.minute}`;
 }
 
 function todayLine(): string {
-  const d = new Date();
-  const weekday = ["日", "一", "二", "三", "四", "五", "六"][d.getDay()] ?? "";
-  return `${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日 · 星期${weekday}`;
+  const p = beijingParts(new Date());
+  const dow = new Date(Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day))).getUTCDay();
+  const weekday = ["日", "一", "二", "三", "四", "五", "六"][dow] ?? "";
+  return `${p.year} 年 ${p.month} 月 ${p.day} 日 · 星期${weekday}`;
 }
 
 function BookmarkButton({ item }: { item: NewsItem }) {
@@ -1833,7 +1854,7 @@ export function App() {
   const queryClient = useQueryClient();
   const status = useQuery({ queryKey: ["status"], queryFn: () => api.getStatus({}) });
   const refreshAll = useMutation({
-    mutationFn: async () => await api.refreshAll({}),
+    mutationFn: async () => await api.refreshAll({ source: "manual" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["status"] });
       queryClient.invalidateQueries({ queryKey: ["myfeed"] });
@@ -1853,11 +1874,22 @@ export function App() {
   });
 
   const lastUpdatedLabel = status.data?.lastUpdatedAt ? formatFullDateTime(status.data.lastUpdatedAt) : null;
-  const lastFailureLabel = status.data?.lastFailureAt ? formatFullDateTime(status.data.lastFailureAt) : null;
-  const showFailure =
-    !!status.data?.lastFailureAt &&
-    (!status.data.lastUpdatedAt || status.data.lastFailureAt > status.data.lastUpdatedAt);
   const scheduleLabel = status.data?.refreshScheduleLabel ?? "每天 08:02 · Asia/Shanghai (UTC+8)";
+  const statusColumnLabel = (c: "learning" | "jiangxi" | "overseas" | null): string =>
+    c === "learning" ? "学习" : c === "jiangxi" ? "江西专升本" : c === "overseas" ? "海外" : "未确认栏目";
+  // The scheduled-run line reads ONLY lastCronRun (written by the daily
+  // task's own refreshAll calls). A column's content time moving proves
+  // the column updated — never that the 08:02 run completed.
+  const cronRun = status.data?.lastCronRun ?? null;
+  const cronRunLabel = !cronRun
+    ? "未确认（暂无定时任务完成记录）"
+    : cronRun.status === "failed"
+      ? `未完成（开始于 ${formatFullDateTime(cronRun.startedAt)}）`
+      : cronRun.status === "running" || !cronRun.finishedAt
+        ? `进行中（开始于 ${formatFullDateTime(cronRun.startedAt)}）`
+        : `已完成 ${formatFullDateTime(cronRun.finishedAt)}`;
+  const currentErrors = status.data?.currentErrors ?? [];
+  const lastError = status.data?.lastError ?? null;
 
   return (
     <div className="min-h-screen bg-[var(--bg)]">
@@ -1889,7 +1921,9 @@ export function App() {
               {refreshAll.isPending ? "刷新中…" : "刷新全部"}
             </button>
           </div>
-          <p className="mt-0.5 text-center text-[11px] text-[var(--dim)]">定时刷新：{scheduleLabel}</p>
+          <p className="mt-0.5 text-center text-[11px] text-[var(--dim)]">
+            定时刷新：{scheduleLabel}；最近一次定时任务：{cronRunLabel}
+          </p>
           {status.data?.columns ? (
             <p className="mt-0.5 text-center text-[11px] text-[var(--dim)]">
               {(
@@ -1909,9 +1943,32 @@ export function App() {
               ))}
             </p>
           ) : null}
-          {showFailure && lastFailureLabel ? (
+          {currentErrors.length > 0 ? (
             <p className="mt-0.5 text-center text-[11px] font-medium text-[var(--accent)]">
-              最近一次更新失败：{lastFailureLabel}，当前显示的是上一版内容
+              {currentErrors
+                .map(
+                  (e) =>
+                    `${statusColumnLabel(e.column)}整理出错${e.errorAt ? `（最近失败 ${formatFullDateTime(e.errorAt)}）` : ""}`,
+                )
+                .join("；")}
+              ，当前显示的是上一版内容
+            </p>
+          ) : null}
+          {currentErrors.length === 0 && lastError ? (
+            <p className="mt-0.5 text-center text-[11px] text-[var(--dim)]">
+              历史错误：{statusColumnLabel(lastError.column)}
+              {lastError.errorAt ? ` ${formatFullDateTime(lastError.errorAt)}` : ""}
+              {lastError.recovered === true
+                ? `，已恢复${lastError.recoveredAt ? ` ${formatFullDateTime(lastError.recoveredAt)}` : ""}`
+                : lastError.recovered === false
+                  ? "，仍未恢复"
+                  : "，恢复情况未确认"}
+            </p>
+          ) : null}
+          {status.data?.lastFailureAt ? (
+            <p className="mt-0.5 text-center text-[11px] text-[var(--dim)]">
+              最近一次抓取失败：{status.data.lastFailureSource ?? "未确认来源"}{" "}
+              {formatFullDateTime(status.data.lastFailureAt)}
             </p>
           ) : null}
 
