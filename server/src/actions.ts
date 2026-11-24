@@ -1614,6 +1614,16 @@ function isAlreadyAwardedReport(item: {
     )
   )
     return false;
+  // Count-anchored already-awarded shape (user, 2026-11-24 z-round):
+  // "65351名学生荣获2025—2026学年本专科生国家励志奖学金" — a named
+  // count of recipients who HAVE received the award, with the award
+  // noun after it. The 可获得/将获得 guard keeps an open scholarship
+  // ("100名学生可获得奖学金") out of this pattern.
+  if (
+    /\d+\s*名(学生|人)(荣获|获得)[^。]{0,30}(奖学金|资助|奖励)/.test(text) &&
+    !/可(获得|荣获)|将(获得|荣获)|有机会(获得|荣获)/.test(text)
+  )
+    return true;
   return (
     /(has|have)\s+(awarded|granted|presented|distributed)\b[^。]{0,50}\b(scholarships?|awards?|grants?|prizes?)\b/i.test(
       text,
@@ -1676,6 +1686,186 @@ function isNightSchoolNewsWithoutCourseEntry(item: {
 }
 
 /**
+ * Weather reports are not learning content (user, 2026-11-24
+ * aa-round): the named case is a Sichuan weather news item that
+ * entered the learning column marked needsApplication=true — a
+ * forecast / warning report names no course, no practice and no
+ * application the user can act on, whatever free-entry fragments its
+ * text carries （避暑点免费开放， 学校停课）. The rule needs the
+ * weather-report shape in the TITLE (weather noun + a report signal:
+ * 预报/预警/实况/播报/降温/降雨/降雪/寒潮/高温/暴雨/大风） and no
+ * entry evidence of the item's own: no startHint and a link that is
+ * NOT a course / learning platform page. A real meteorology course
+ * on a course platform is untouched.
+ */
+function isWeatherNewsWithoutLearningEntry(item: {
+  title: string;
+  startHint?: string | null;
+  url?: string | null;
+}): boolean {
+  if (!/天气|气象/.test(item.title)) return false;
+  if (!/预报|预警|实况|播报|降温|降雨|降雪|寒潮|高温|暴雨|大风/.test(item.title)) return false;
+  if (item.startHint && item.startHint.trim()) return false;
+  const host = item.url ? hostOf(item.url) : "";
+  if (host && COURSE_PLATFORM_HOSTS.some((d) => host === d || host.endsWith(`.${d}`))) return false;
+  return true;
+}
+
+/**
+ * z-round two-class gate (user, 2026-11-24): a pool item stays in the
+ * learning column ONLY when it fits one of the user's two classes —
+ * 随时可学 or 近期可报名 — judged on its own stored evidence, never on
+ * the bare needsApplication flag. needsApplication=true alone proves
+ * nothing: the Education Times weekly admissions/scholarships roundup,
+ * the BERNAMA ARTIVO primary-school scholarship, the ifeng Sichuan
+ * 励志奖学金获奖名单， the GET2026 closed-door forum invite and the
+ * FutureLearn humanitarian-programmes blog all carried
+ * needsApplication=true with fee null and no verified entry, and all
+ * five entered the column (four of them as group=null, i.e. under the
+ * client's 「其他学习机会」). Either helper returning true keeps the
+ * item; otherwise it is dropped entirely and never reaches that group,
+ * because the gate runs before grouping in getLearning, at ingest in
+ * loadLearning, and in the getDailyDigest learning loop.
+ */
+type LearningGateItem = {
+  title: string;
+  summaryZh?: string | null;
+  points?: string[];
+  audienceStage: string | null;
+  deadline: string | null;
+  needsApplication?: boolean;
+  url?: string | null;
+  source?: string | null;
+  fee?: string | null;
+  startHint?: string | null;
+  category?: LearningCategory;
+  officialUrl?: string | null;
+};
+
+/** Free-entry evidence for a learnable entry: the fee field says 免费
+ * (a bare 免费试听 never counts — the trial rule upstream already drops
+ * those), a startHint names the first lesson, or the item's own text
+ * binds 免费 DIRECTLY to a learnable entry （免费课程/免费公开课/免费
+ * 学习/免费选课/免费旁听/免费注册/免费练习/免费实验/免费回放/免费
+ * 慕课/免费题库/免费训练营/免费系列课/免费教学视频/免费开放课程，
+ * 可免费学习/选课/旁听， or 课程/公开课/讲座/学习/选课/练习/实验
+ * 免费）. Free registration and certificate-only charges keep the
+ * item. Tightened 2026-11-24 (aa-round): the z-round pattern allowed
+ * 免费 up to 8 chars before the noun and counted a bare 免费开放 on
+ * its own — a Sichuan weather report (shelters / scenic spots 免费
+ * 开放， classes suspended 停课） and roundup / solicitation texts
+ * with an incidental 免费…课程 fragment passed on fragments that say
+ * nothing about a free course entry of the item itself. A bare 免费
+ * elsewhere （答案几乎免费， 免费参与一场论坛， 免费开放征集） is NOT
+ * free-entry evidence. */
+function hasVerifiedFreeEntry(item: LearningGateItem, text: string): boolean {
+  const fee = item.fee ?? "";
+  if (/免费/.test(fee) && !/试听/.test(fee)) return true;
+  if (item.startHint && item.startHint.trim()) return true;
+  return /免费(学习|选课|旁听|注册|课程|公开课|讲座|练习|实验|实训|回放|回看|慕课|题库|训练营|系列课|教学视频|开放课程)|可免费(学习|选课|旁听)|(课程|公开课|讲座|学习|选课|练习|实验)免费/i.test(
+    text,
+  );
+}
+
+/**
+ * 随时可学 (user, 2026-11-24 z-round): the item names a concrete
+ * learnable entry — 课程/公开课/讲座/回放/回看/练习/实验/实训/题库/
+ * CTF/慕课/训练营/学习计划/系列课/教学视频/课堂/开放教材/录像/靶场/
+ * 英语/日语/韩语/语言学习， a free textbook （教材＋免费/下载/开放
+ * 获取）, or the English course/lecture/tutorial/bootcamp/lab/MOOC —
+ * or it links straight to a known course platform
+ * (COURSE_PLATFORM_HOSTS) — AND free entry is verified by
+ * hasVerifiedFreeEntry. The platform-host alternative is what keeps a
+ * bare-titled MOOC page (e.g. the curated 北理工网安课's MOOC twin,
+ * whose title/summary name no 课）: platform + verified-free is itself
+ * a free course entry. A FutureLearn/Coursera BLOG page on the same
+ * host fails here: its fee is null and its text states no free entry.
+ */
+function isAnytimeLearnable(item: LearningGateItem): boolean {
+  const text = `${item.title} ${item.summaryZh ?? ""} ${(item.points ?? []).join(" ")}`;
+  if (!hasVerifiedFreeEntry(item, text)) return false;
+  // The bare character 课 no longer counts as a learnable signal
+  // (aa-round, 2026-11-24): it matched 停课 in weather reports and
+  // 课 in unrelated compounds, none of which name a course, practice
+  // or replay entry the user can start.
+  const learnableText =
+    /课程|公开课|讲座|回放|回看|练习|实验|实训|题库|CTF|慕课|训练营|学习计划|系列课|教学视频|课堂|开放教材|录像|靶场|英语|日语|韩语|语言学习|教材[^。]{0,6}(免费|下载|开放获取)|\b(courses?|lectures?|tutorials?|bootcamps?|labs?|mooc)\b/i.test(
+      text,
+    );
+  if (learnableText) return true;
+  const host = item.url ? hostOf(item.url) : "";
+  return (
+    !!host &&
+    COURSE_PLATFORM_HOSTS.some((d) => host === d || host.endsWith(`.${d}`))
+  );
+}
+
+/**
+ * 近期可报名 (user, 2026-11-24 z-round): ALL of these must hold —
+ * (a) needsApplication is true; (b) a confirmed official entry exists
+ * (officialUrl, the stored proxy for a 主办方官方报名入口 — note a
+ * direct-feed item carries officialUrl=url, so (b) alone proves nothing
+ * and (c)–(e) do the real work); (c) free application is confirmed —
+ * the fee field says 免费 or the text states 报名免费/申请免费/
+ * 免报名费/免费报名/免申请费； (d) currently open — a future deadline,
+ * or open/rolling wording （报名开放/正在报名/现正接受申请/接受申请/
+ * 开始申请/申请开放/申请进行中/长期开放/滚动报名/常年开放/随时报名/
+ * 全年开放/全年接受…); (e) the stated scope includes a Jiangxi 专科
+ * 在读生 （专科/高职/大专/大学生/高校学生/在校大学生/不限/所有学生）
+ * and is NOT restricted to another country's students — the NASA Moon
+ * Base Student Challenge reports are the named case: open and dated
+ * (registration open through Jan. 25, 2027) but fee unverified and
+ * US-only (U.S. high school / post-secondary teams at eligible US
+ * institutions), so they fail (b)/(c)/(e) together. A rolling /
+ * long-term-open project may have no deadline. aa-round (2026-11-24):
+ * (b) additionally rejects roundup titles and redirect-wrapper links
+ * (see below), and (e)'s 不限 must be an education-scope 不限 — a
+ * public solicitation's 不限年龄/不限地域 does not put a Jiangxi
+ * 专科在读生 in scope.
+ */
+function isUpcomingClass(item: LearningGateItem, todayStr: string): boolean {
+  if (item.needsApplication !== true) return false;
+  if (!item.officialUrl) return false;
+  // aa-round (2026-11-24): an aggregation is not an application entry.
+  // A roundup title （汇总/盘点/一览/合集/WEEKLY ALERTS) aggregates
+  // many programmes' deadlines — the item itself has no single
+  // organizer application page, however official-looking its extracted
+  // link is (the Education Times weekly roundup's "official" link was
+  // an Outlook safelinks redirect). A redirect-wrapper URL is likewise
+  // never a 主办方官方报名入口.
+  if (/汇总|盘点|一览|合集|weekly alerts|roundup/i.test(item.title)) return false;
+  const officialHost = hostOf(item.officialUrl);
+  if (officialHost === "safelinks.protection.outlook.com" || officialHost.endsWith(".safelinks.protection.outlook.com"))
+    return false;
+  const text = `${item.title} ${item.summaryZh ?? ""} ${(item.points ?? []).join(" ")}`;
+  const feeFree = (item.fee ?? "").includes("免费") && !/试听/.test(item.fee ?? "");
+  const textFeeFree =
+    /报名免费|申请免费|免报名费|免费报名|免申请费|no application fee|free (to )?apply|application is free/i.test(
+      text,
+    );
+  if (!feeFree && !textFeeFree) return false;
+  const open =
+    (item.deadline != null && item.deadline >= todayStr) ||
+    /报名开放|正在报名|现正接受申请|接受申请|开始申请|申请开放|申请进行中|长期开放|滚动报名|常年开放|随时报名|全年开放|全年接受|open for applications|now accepting applications|applications (are |now )?open|registration (is )?open|rolling admission/i.test(
+      text,
+    );
+  if (!open) return false;
+  const scopeText = `${item.audienceStage ?? ""} ${text}`;
+  if (
+    /仅限[^。]{0,12}美国|美国(高中生|大学生|在校学生|学生)|U\.?S\. (high school|post-secondary|college) students?|eligible US institutions|only (for )?U\.?S\. (students|residents|citizens)/i.test(
+      scopeText,
+    )
+  )
+    return false;
+  // Scope evidence (aa-round tightening): a bare 不限 no longer
+  // counts — public solicitations say 不限年龄/不限地域 without
+  // including a Jiangxi 专科在读生 in any verified sense; only an
+  // education-scope 不限 （学历/专业/学校/年级不限 or the reverse
+  // order) or an explicit student scope counts.
+  return /(专科|高职|大专|大学生|高校学生|在校大学生|所有学生|(学历|专业|学校|年级)不限|不限(学历|专业|学校|年级))/.test(scopeText);
+}
+
+/**
  * Learning-column rule (user, 2026-11-22): category 4 （学习与实践） keeps
  * ONLY what the user can still act on — skills competitions, free courses
  * or labs, language learning and language-exam registration that he can
@@ -1728,6 +1918,8 @@ function isLearningNotActionable(
     source?: string | null;
     fee?: string | null;
     startHint?: string | null;
+    category?: LearningCategory;
+    officialUrl?: string | null;
   },
   todayStr: string,
 ): boolean {
@@ -1926,18 +2118,40 @@ function isLearningNotActionable(
   // even when enrichment marked it needsApplication. The 广州日报
   // 大洋网 youth-night-school report is the named case.
   if (isNightSchoolNewsWithoutCourseEntry(item)) return true;
-  // No actionable signal at all → a pure news report, an advice essay or
-  // a product/company story (the UN climate report, the AI-interviewer
-  // news, the MIT program write-ups, the Workday integration story).
-  // Actionable means: it needs an application/sign-up, or the title names
-  // a course / lecture / lab / contest / exam / scholarship / textbook /
-  // question bank / language study the user can start or join.
-  const actionable =
-    item.needsApplication === true ||
-    /(课程|公开课|实验|讲座|训练营|慕课|学习计划|系列课|竞赛|大赛|考试|报名|招生|申请|奖学金|教材|题库|英语|日语|韩语|语言学习)|\b(courses?|lectures?|bootcamp|learning plans?|scholarships?|competitions?|exams?)\b/i.test(
-      t,
-    );
-  if (!actionable) return true;
+  // Weather reports with no learning entry (user, 2026-11-24
+  // aa-round): a Sichuan weather news item marked needsApplication
+  // is pure news — out, whatever free-entry fragments its text
+  // carries. A course-platform meteorology course is untouched.
+  if (isWeatherNewsWithoutLearningEntry(item)) return true;
+  // Two-class gate (user, 2026-11-24 z-round): a pool item stays ONLY
+  // when it fits 随时可学 (a concrete free course / practice / replay
+  // entry) or 近期可报名 (confirmed official entry + currently open +
+  // free application + 专科在读 in scope). The old check below it let
+  // anything with needsApplication=true through, which is how the
+  // Education Times roundup, the BERNAMA primary-school scholarship,
+  // the ifeng awarded-list report, the GET2026 forum invite and the
+  // FutureLearn blog all entered with fee null and no verified entry.
+  // Neither class → dropped entirely, never re-shown under 「其他」:
+  // this filter runs before grouping in getLearning, at ingest in
+  // loadLearning, and in the getDailyDigest learning loop.
+  //
+  // Class coherence (aa-round, 2026-11-24): an opportunities-category
+  // item is an APPLICATION item — it can only qualify through the
+  // 近期可报名 class, never through 随时可学 text fragments. The four
+  // items the user named this round (a Sichuan weather report, an
+  // overseas scholarship roundup, two similar moon-idea solicitation
+  // reports — all needsApplication=true, fee unverified, group empty)
+  // survived the z-round gate exactly that way: stray free-entry
+  // fragments in their text passed isAnytimeLearnable, yet as
+  // opportunities items they belonged to neither display group and
+  // surfaced under the client's 「其他学习机会」 with group=null.
+  // Courses / resources items keep both paths: a free course that
+  // itself runs an open, free, in-scope application still qualifies.
+  if (item.category === "opportunities") {
+    if (!isUpcomingClass(item, todayStr)) return true;
+  } else if (!isAnytimeLearnable(item) && !isUpcomingClass(item, todayStr)) {
+    return true;
+  }
   return false;
 }
 
@@ -1956,7 +2170,7 @@ async function loadLearning(
   budget: RunBudget = newRunBudget(),
 ): Promise<{ items: LearningItem[]; asOf: string }> {
   if (!force) {
-    const cached = await readCache<LearningItem[]>(ctx, "learning:all:v2", LEARNING_TTL_MS);
+    const cached = await readCache<LearningItem[]>(ctx, "learning:all:v3", LEARNING_TTL_MS);
     // Guard against payloads written by older builds: missing link fields, or
     // any item still carrying a relay link (Google News / Bing apiclick) as
     // its stored URL — those payloads must be rebuilt, never served.
@@ -2093,7 +2307,7 @@ async function loadLearning(
 
   if (candidates.length === 0) {
     await noteRefreshFailure(ctx, "学习");
-    const stale = await readCacheStale<LearningItem[]>(ctx, "learning:all:v2");
+    const stale = await readCacheStale<LearningItem[]>(ctx, "learning:all:v3");
     if (stale) return { items: stale.data, asOf: stale.asOf };
     return { items: [], asOf: new Date().toISOString() };
   }
@@ -2291,6 +2505,14 @@ async function loadLearning(
   for (const it of candidates) {
     if (droppedUrls.has(it.url)) continue;
     const entry = enrichStore[it.url];
+    // Official entry is derived BEFORE the filter (z-round, 2026-11-24):
+    // the 近期可报名 class needs it as evidence, and the same value is
+    // stored on the item below — ingest and every read judge the item
+    // on identical evidence.
+    const host = hostOf(it.url);
+    let officialUrl: string | null = it.officialHint;
+    if (!officialUrl && isInstitutionalHost(host)) officialUrl = it.url;
+    if (!officialUrl && it.directFeed) officialUrl = it.url;
     if (
       isLearningNotActionable(
         {
@@ -2303,6 +2525,8 @@ async function loadLearning(
           url: it.url,
           source: it.source,
           fee: entry?.fee ?? null,
+          category: entry?.category ?? it.hint,
+          officialUrl,
         },
         todayStrL,
       )
@@ -2313,10 +2537,6 @@ async function loadLearning(
     // the item's own source summary — never a mid-sentence cut, and
     // never a fabricated translation when no model pass ran.
     const fallbackSummaryZh = hasSummary ? completeSentences(it.summary as string, 110) : null;
-    const host = hostOf(it.url);
-    let officialUrl: string | null = it.officialHint;
-    if (!officialUrl && isInstitutionalHost(host)) officialUrl = it.url;
-    if (!officialUrl && it.directFeed) officialUrl = it.url;
     items.push({
       title: it.title,
       url: it.url,
@@ -2354,7 +2574,7 @@ async function loadLearning(
   //    version instead of overwriting it with a degraded one.
   const anyEnriched = items.some((it) => it.summaryZh !== null);
   if (!anyEnriched && items.length > 0) {
-    const stale = await readCacheStale<LearningItem[]>(ctx, "learning:all:v2");
+    const stale = await readCacheStale<LearningItem[]>(ctx, "learning:all:v3");
     if (stale && stale.data.some((it) => it.summaryZh !== null)) {
       return { items: stale.data, asOf: stale.asOf };
     }
@@ -2365,7 +2585,7 @@ async function loadLearning(
   // saves already wrote the store during the run; this final write just
   // settles it.
   await writeCache(ctx, "learning:enrich:v2", boundedEnrichStore(enrichStore, candidates.map((c) => c.url)));
-  const asOf = await writeCache(ctx, "learning:all:v2", items);
+  const asOf = await writeCache(ctx, "learning:all:v3", items);
   return { items, asOf };
 }
 
@@ -6565,7 +6785,7 @@ export const Actions = {
       };
       // Each column's content time is its own cache row's write time.
       const contentKey: Record<ColumnKey, string> = {
-        learning: "learning:all:v2",
+        learning: "learning:all:v3",
         jiangxi: "jiangxi:all:v5",
         overseas: "overseas:all:v20",
       };
@@ -6760,7 +6980,7 @@ export const Actions = {
 
   getLearning: defineAction({
     description:
-      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生； since 2026-11-23 the stage signals — middle school(s), 中小学， 初中， 高中生， 中六， JUPAS, DSE, 研究生/硕士研究生 — are matched against title + summary + points + audienceStage together, so an item whose stage is stated only in its body, e.g. an HKU undergraduate item naming JUPAS/中六 in its points, is excluded too), pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships), activity write-ups whose summary dates the event in the past (\"X月X日……举行/举办/召开\" with no replay and no sign-up, e.g. the 东湖大咖公开课 report), 专硕/学硕 master's-stage items (e.g. the 专硕 dorm-policy news), scholarships limited to one local school district's students or to high-school students only (school district / juniors and seniors / high school football / high school athlete / 学区 / 高中生， e.g. the St. Joseph scholarship and the People high-school athlete scholarship story) and expired intakes are all filtered out, so the list may honestly be empty. 自 2026-11-23 起另有两条规则：只有宣传博客、限时试听或无法核实免费范围的内容不进学习栏（课程卡必须直接链接到可免费学习的具体课程、练习或讲座回放；免费注册、仅证书收费的课程保留）；已发放/已颁发类报道不进可报名列表且 needsApplication 纠正为 false，只有官方页面确认报名已开放、报名免费且申请范围包含中国专科在读生时才列入，官方明确滚动报名或常年开放的项目即使没有截止日期也可保留。 HTML entities (&#…; and &…;, incl. double-encoded forms) are decoded in titles, points and summaries at ingest and on every read (2026-11-23), and an unenriched item's summary/relevance line is rebuilt from complete sentences of its own source summary — never cut mid-sentence and never a fabricated translation. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip. Since 2026-11-23 the list is split into two display groups via each item's group field: seven hand-verified free resources that can be started right now (CURATED_LEARNING_ANYTIME — 网络安全/英语公开课， authorised CTF practice, a Cambridge lecture recording; each with a startHint naming the first lesson or exercise) lead the items array as group=anytime, followed by pool courses/resources (also anytime); pool opportunities with a deadline in the next 30 days and a confirmed official entry are group=upcoming （近期可报名）; other opportunities keep group=null. The curated 近期可报名 set is empty this round — no official page was verified as explicitly open and free — so that group may honestly show its empty state. 自 2026-11-23 起，池内条目只有含真实可学内容（课程/讲座/回放/练习/实验）才进随时可学；纯政策新闻（征求意见稿、管理条例/办法类通知，如《教材管理条例（征求意见稿）》）由学习栏规则滤掉，永不为 group=anytime。自 2026-11-23 起另有 7 门人工核实的免费中文 AI 课程（CURATED_LEARNING_AI）作为持久精选随随时可学一同返回，每门带 aiTopic=true 供客户端的「AI 学习」话题筛选使用（能学什么/需要什么基础/从哪一课开始都写在卡上；全部免费学习、需免费注册、仅认证证书付费）；池内条目永不带 aiTopic。自 2026-11-23 起，Coursera 博客《Introducing AI Series on Coursera》（背后是 Coursera Plus 付费订阅、无单门免费带中文字幕课程、面向在职人士）由宣传博客规则从学习栏整个移除，不再保留随时可学位置；吴恩达《AI for Everyone》因只有非官方搬运、正版免费旁听与中文字幕未核实而不收录。自 2026-11-24 起另有一条确定性规则：标题含「夜校」、费用未说明、无 startHint、无截止日期且链接不在课程/学习平台域名上的条目，按纯新闻滤掉（如广州日报大洋网的青年夜校生活方式报道——没有任何具体课程、报名入口或免费学习入口）；带费用说明或开始提示的真实夜校课程不受影响。",
+      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生； since 2026-11-23 the stage signals — middle school(s), 中小学， 初中， 高中生， 中六， JUPAS, DSE, 研究生/硕士研究生 — are matched against title + summary + points + audienceStage together, so an item whose stage is stated only in its body, e.g. an HKU undergraduate item naming JUPAS/中六 in its points, is excluded too), pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships), activity write-ups whose summary dates the event in the past (\"X月X日……举行/举办/召开\" with no replay and no sign-up, e.g. the 东湖大咖公开课 report), 专硕/学硕 master's-stage items (e.g. the 专硕 dorm-policy news), scholarships limited to one local school district's students or to high-school students only (school district / juniors and seniors / high school football / high school athlete / 学区 / 高中生， e.g. the St. Joseph scholarship and the People high-school athlete scholarship story) and expired intakes are all filtered out, so the list may honestly be empty. 自 2026-11-23 起另有两条规则：只有宣传博客、限时试听或无法核实免费范围的内容不进学习栏（课程卡必须直接链接到可免费学习的具体课程、练习或讲座回放；免费注册、仅证书收费的课程保留）；已发放/已颁发类报道不进可报名列表且 needsApplication 纠正为 false，只有官方页面确认报名已开放、报名免费且申请范围包含中国专科在读生时才列入，官方明确滚动报名或常年开放的项目即使没有截止日期也可保留。 HTML entities (&#…; and &…;, incl. double-encoded forms) are decoded in titles, points and summaries at ingest and on every read (2026-11-23), and an unenriched item's summary/relevance line is rebuilt from complete sentences of its own source summary — never cut mid-sentence and never a fabricated translation. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip. Since 2026-11-23 the list is split into two display groups via each item's group field: seven hand-verified free resources that can be started right now (CURATED_LEARNING_ANYTIME — 网络安全/英语公开课， authorised CTF practice, a Cambridge lecture recording; each with a startHint naming the first lesson or exercise) lead the items array as group=anytime, followed by pool courses/resources (also anytime); pool opportunities with a deadline in the next 30 days and a confirmed official entry are group=upcoming （近期可报名）; a rolling / long-term-open opportunity in the 近期可报名 class is group=upcoming even without a deadline, and after the z-round two-class gate no pool item keeps group=null. The curated 近期可报名 set is empty this round — no official page was verified as explicitly open and free — so that group may honestly show its empty state. 自 2026-11-23 起，池内条目只有含真实可学内容（课程/讲座/回放/练习/实验）才进随时可学；纯政策新闻（征求意见稿、管理条例/办法类通知，如《教材管理条例（征求意见稿）》）由学习栏规则滤掉，永不为 group=anytime。自 2026-11-23 起另有 7 门人工核实的免费中文 AI 课程（CURATED_LEARNING_AI）作为持久精选随随时可学一同返回，每门带 aiTopic=true 供客户端的「AI 学习」话题筛选使用（能学什么/需要什么基础/从哪一课开始都写在卡上；全部免费学习、需免费注册、仅认证证书付费）；池内条目永不带 aiTopic。自 2026-11-23 起，Coursera 博客《Introducing AI Series on Coursera》（背后是 Coursera Plus 付费订阅、无单门免费带中文字幕课程、面向在职人士）由宣传博客规则从学习栏整个移除，不再保留随时可学位置；吴恩达《AI for Everyone》因只有非官方搬运、正版免费旁听与中文字幕未核实而不收录。自 2026-11-24 起另有一条确定性规则：标题含「夜校」、费用未说明、无 startHint、无截止日期且链接不在课程/学习平台域名上的条目，按纯新闻滤掉（如广州日报大洋网的青年夜校生活方式报道——没有任何具体课程、报名入口或免费学习入口）；带费用说明或开始提示的真实夜校课程不受影响。自 2026-11-24 起另有两类守门规则（z-round）：池内条目只有符合随时可学（有明确的免费课程、练习或回放入口；免费注册、仅证书收费保留）或近期可报名（有主办方官方报名入口、确认当前开放、报名免费且专科在读符合条件；官方明确长期/滚动开放的项目可以没有截止日期）才保留，两类都不满足的条目从学习列表彻底移除，不再进入「其他学习机会」；仅 needsApplication=true、未核实费用的招生/奖学金汇总、已颁发获奖名单、论坛邀请、博客文章和天气新闻等均被滤掉。自 2026-11-24 起再收紧（aa-round）：opportunities 类条目只能经「近期可报名」类合格，不能再靠「随时可学」的文本碎片混入后以 group=null 落进「其他学习机会」；随时可学的免费证据须由 免费 直接绑定课程/练习/回放等可学入口（裸「免费开放」和「免费…（隔字）…课程」不再算数），可学信号不再认裸字「课」（停课不算课程）；标题为天气/气象预报预警类且无自身学习入口的条目按纯新闻滤掉；汇总/盘点类标题不算单项官方报名入口，Outlook safelinks 跳转链接不算主办方官方入口，范围证据里的裸「不限」须为学历/专业/学校/年级不限才算。学习缓存键升至 learning:all:v3，旧缓存不再被读到。",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -6818,10 +7038,16 @@ export const Actions = {
         // those, and this guard keeps the grouping honest even if a
         // cached item ever reaches here unfiltered. The curated anytime
         // resources are prepended below and never pass through here.
+        // z-round (2026-11-24): an item in the 近期可报名 class is
+        // group=upcoming even without a deadline in the next 30 days —
+        // a rolling / long-term-open project may have no deadline at
+        // all, and it must never fall through to group=null, which the
+        // client renders under 「其他学习机会」. After the two-class
+        // gate above, group=null is unreachable for pool items.
         group: ((it.category === "courses" || it.category === "resources") &&
         !isPolicyNewsWithoutLearnableContent(it)
           ? "anytime"
-          : upcomingUrls.has(it.url)
+          : upcomingUrls.has(it.url) || isUpcomingClass(it, todayStr)
             ? "upcoming"
             : null) as "anytime" | "upcoming" | null,
       }));

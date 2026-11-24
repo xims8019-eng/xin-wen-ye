@@ -74,6 +74,8 @@
 
 **2026-11-23 补修：纯政策新闻永不进随时可学（`isPolicyNewsWithoutLearnableContent`）。** 池内新闻《教材管理条例（征求意见稿）》曾被分进随时可学：旧分组对池内课程/资源类无条件给 anytime，且 actionable 标题正则里的裸词「教材」让它单独通过。新规则：标题带法规标记（征求意见稿/管理条例/管理办法/实施办法/管理规定/暂行办法/实施细则/试行办法，只查标题）且全文（标题+摘要+要点）没有任何可学信号（课程/公开课/讲座/回放/练习/实验/CTF/慕课等，或「教材」后紧接免费/下载/开放获取）时判为纯政策新闻，在 `isLearningNotActionable` 里直接排除——入库、每次读回、每日速览的学习循环三处共用同一函数；`getLearning` 分组再加一道同样的检查作双保险。裸词「教材」不是可学信号：条例是关于教材的规定，不是能学的教材。规则级 6 例验证与线上读回都已通过（具名条目已不在学习栏出现，7 条人工精选与 Coursera 真实课程不受影响）。
 
+**2026-11-24 新增：学习栏两类守门规则（`hasVerifiedFreeEntry` / `isAnytimeLearnable` / `isUpcomingClass`，z-round，aa-round 再收紧）。** 池内条目只有符合随时可学或近期可报名才保留，两类都不满足的彻底移除，不再进入「其他学习机会」；旧的裸 needsApplication/标题关键词兜底删除。随时可学须有明确可学入口且免费证据经核实（免费须直接绑定课程/练习/回放入口，裸「免费开放」与隔字「免费…课程」不算；可学信号不再认裸字「课」）。近期可报名须同时满足：needsApplication=true、有 officialUrl（`loadLearning` 里过滤前推导，与每次读回用同一证据）、费用免费、当前开放、范围含专科在读且不限于他国学生。opportunities 类只能经近期可报名合格；汇总/盘点类标题与 Outlook safelinks 跳转链接不算官方报名入口；范围里的「不限」须为学历/专业/学校/年级不限。另新增天气规则（`isWeatherNewsWithoutLearningEntry`：标题天气/气象＋预报预警类信号、无 startHint、非课程平台链接时按纯新闻滤掉，具名案例四川天气新闻）与已颁发计数形态（`isAlreadyAwardedReport`：`\d+名学生荣获/获得……奖学金/资助/奖励`，具名案例 ifeng 四川 65351 名学生获奖名单；「可获得/将获得」除外）。具名误收 5 条全部滤掉：FutureLearn 博客、Education Times 周报、BERNAMA ARTIVO 小学奖学金、ifeng 获奖名单、GET2026 论坛邀请；14 条精选（7 anytime + 7 AI）保留。分组上滚动/长期开放的近期可报名项目即使无 30 天内截止日期也进 group=upcoming，守门后池内无 group=null。缓存键 `learning:all:v2` 升至 `v3`（5 处），旧缓存不再被读到。匹配测试 32/32（真实存量文本＋天气/月球征集公开文本形状，见 DATA-PLAN.md z-round 小节）。
+
 ## 5. 江西专升本整理（`loadJiangxi`，用到模型）
 
 - 4 条 Bing 搜索（无时间窗，往年材料作备考参考），标题含成人高考/自考的过滤掉。
