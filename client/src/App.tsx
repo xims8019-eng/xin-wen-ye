@@ -560,7 +560,7 @@ function EnglishTopicNote() {
   return (
     <div className="mt-3 rounded-[var(--radius)] bg-[var(--space-surface-alt)] p-3 text-sm leading-relaxed text-[var(--dim)]" role="note" aria-label="英语筛选说明">
       <p>
-        英语分<span className="font-medium text-[var(--text)]">专升本英语</span>和<span className="font-medium text-[var(--text)]">日常英语</span>两个方向。按江西 2026 年考试说明（往年参考，2028 版尚未发布），专升本英语考词汇与结构、阅读理解、完形填空、段落翻译和写作，<span className="font-medium text-[var(--text)]">不考听力和口语</span>——听力口语资源只归日常英语，不标为对齐考试。目前带此筛选的只有日常英语方向的口语课；对齐考试说明的专升本英语课程和练习，本轮没有核实到符合免费规则的，先不硬凑。
+        英语分<span className="font-medium text-[var(--text)]">专升本英语</span>和<span className="font-medium text-[var(--text)]">日常英语</span>两个方向。按江西 2026 年考试说明（往年参考，2028 版尚未发布），专升本英语考词汇与结构、阅读理解、完形填空、段落翻译和写作，<span className="font-medium text-[var(--text)]">不考听力和口语</span>——听力口语资源只归日常英语，不标为对齐考试。目前带此筛选的有 5 门对齐考试的专升本英语课（河南科大《大学英语（四）》、长安《大学英语读写（一）》、新通用大学英语（一）、南京大学《大学英语学术阅读与写作》与《英汉互译方法与技巧》）和 2 门日常英语课（国防科大《大学英语（口语）》、集美《英语听力技能与实践》）；这 5 门专升本英语课按平台免费口径上架（平台课程学习免费，仅认证证书付费；课程页未写‘免费’二字），每张卡片都如实标注。
       </p>
     </div>
   );
@@ -570,7 +570,7 @@ function MathTopicNote() {
   return (
     <div className="mt-3 rounded-[var(--radius)] bg-[var(--space-surface-alt)] p-3 text-sm leading-relaxed text-[var(--dim)]" role="note" aria-label="高等数学筛选说明">
       <p>
-        高数按江西《高等数学及其应用》考试说明的官方顺序共 <span className="font-medium text-[var(--text)]">6 个阶段</span>：函数、极限和连续 → 一元函数微分学 → 一元函数积分学 → 常微分方程 → 多元函数微分学 → 二重积分。江苏农林《高等数学（一）》覆盖第 1–3 阶段，可汗学院中文站覆盖全部 6 阶段；每张卡片都写了第一次打开从哪节开始。2028 年考试说明发布后再按新版调整。
+        高数按江西《高等数学及其应用》考试说明的官方顺序共 <span className="font-medium text-[var(--text)]">6 个阶段</span>：函数、极限和连续 → 一元函数微分学 → 一元函数积分学 → 常微分方程 → 多元函数微分学 → 二重积分。江苏农林《高等数学（一）》覆盖第 1–3 阶段，同济《高等数学（一）》覆盖第 1–2 阶段、《高等数学（二）》覆盖第 3–4 阶段，南京工大《高等数学（一）》覆盖第 1–4 阶段，《高等数学（下）》以第 5–6 阶段为主（附带第 4 阶段），可汗学院中文站覆盖全部 6 阶段；每张卡片都写了第一次打开从哪节开始。2028 年考试说明发布后再按新版调整。
       </p>
     </div>
   );

@@ -412,3 +412,24 @@ Imagery not needed: a text-first broadsheet news page — headlines, rankings an
 - 研究依据（协调员已读江西 2026 年考试说明，官方 PDF https://jyt.jiangxi.gov.cn ，143 页）：英语 p.22–25——100 分，考词汇与结构、阅读理解、完形填空（15 选 10）、段落翻译（汉英互译）、写作；不考听力和口语，故听力口语资源只能进「日常英语」。适用年份标“2026·往年参考”（2028 版未发布）。高数《高等数学及其应用》p.83–88——官方顺序 6 阶段：1 函数、极限和连续 → 2 一元函数微分学及其应用 → 3 一元函数积分学及其应用 → 4 常微分方程 → 5 多元函数微分学及其应用 → 6 二重积分及其应用（常微分方程在多元微分之前，与同济顺序不同）；150 分，120 分钟。
 - Changes: ① 国防科技大学《大学英语（口语）》加 englishTopic=true，points 开头加“方向：日常英语（2026 年考试说明不考听力口语，这门课练日常口语）”。② 江苏农林《高等数学（一）》加 mathTopic=true（高数路线第 1–3 阶段；卡片原有“只覆盖一元微积分、不含常微分方程、多元微分、二重积分”说明保留）。③ CURATED_LEARNING_ANYTIME 末尾新增可汗学院中文站 https://zh.khanacademy.org/ （source「可汗学院（非营利）」，mathTopic=true，fee「免费」——首页写明‘免费在线课程，讲解以及练习’‘对学生、教师和家庭永远免费’，本轮唯一通过严格免费规则的新资源；points 按 6 阶段写入口与章节深链，含导数定义视频、函数分析单元、积分单元、双积分文章的 zh.khanacademy.org 直达链接；注明从中国访问可能加载偏慢、视频流畅播放未实测）。数组 14 → 15 项，合并精选 21 → 22 条，AI 筛选仍 7 条。
 - Client: LearningTopic 扩展为 "all" | "ai" | "english" | "math"，LearningTopicFilter 加「英语」「高等数学」两个 chip；新增 matchesTopic 统一判断，LearningSection 与 LearningView 都用它过滤；选 english 显示方向说明（专升本英语/日常英语，2026 年考试不考听力口语），选 math 显示 6 阶段路线说明（江苏农林覆盖 1–3 阶段、可汗学院覆盖全部 6 阶段）。
+
+## 学习栏「英语」「高等数学」筛选 Tier 2 放行：新增 10 项 MOOC 课 (2026-11-26 edit)
+- Brief: 用户 2026-11-26 22:54 批准（点了「加上，标清平台免费」）：把 Tier 2 的约 11 条候选按平台免费口径加进学习栏「英语」「高等数学」筛选，卡片如实标注「平台课程学习免费，仅认证证书付费；课程页未写‘免费’二字」。研究员已逐条核实 URL 与课程页内容，字段照抄。
+- Added (10, all appended to `CURATED_LEARNING_ANYTIME` after the existing 15, all group=anytime、audienceStage=专科在读、category=courses、publishedAt=null、deadline=null、needsApplication=false、needsLogin=false、blockedReason=null、chineseUrl=null、titleOnly=false、enrichState=stored；fee 均为短版「平台课程学习免费，仅认证证书付费」，points 末尾照抄完整批准句；summaryZh/relevance 只从给定 points 提炼，未加新事实）:
+  - A1 大学英语（四） https://www.icourse163.org/course/HAUST-1205788802 （中国大学MOOC · 河南科技大学；englishTopic，专升本英语）
+  - A2 大学英语读写（一） https://www.icourse163.org/course/CHD-1473164170 （中国大学MOOC · 长安大学；englishTopic，专升本英语）
+  - A3 新通用大学英语（一） https://www.icourse163.org/course/JLXY-1461316178 （中国大学MOOC · 南京大学金陵学院——课程页署名如此，非南京大学本部；englishTopic，专升本英语）
+  - A4 大学英语学术阅读与写作（王海啸） https://www.icourse163.org/course/NJU-1002227016 （中国大学MOOC · 南京大学；englishTopic，专升本英语；注意：该 /course/ 链接文字版抓取只返回隐私提示页，课程内容是经 /learn/ 链接核实的；仍用这个 /course/ 链接上架，需人工点开复核）
+  - A5 英汉互译方法与技巧 https://www.icourse163.org/course/NJU-1002331010 （中国大学MOOC · 南京大学；englishTopic，专升本英语，5 门中唯一翻译专项）
+  - B2 英语听力技能与实践 https://www.icourse163.org/course/JMU-1002922010 （中国大学MOOC · 集美大学；englishTopic，日常英语；配套教材修订版需自行购买，不影响课程免费）
+  - M1 高等数学（一） https://www.icourse163.org/course/TONGJI-53004 （中国大学MOOC · 同济大学；mathTopic，第 1–2 阶段）
+  - M2 高等数学（二） https://www.icourse163.org/course/detail.htm?cid=217012 （中国大学MOOC · 同济大学；mathTopic，第 3–4 阶段）
+  - M3 高等数学（下） https://www.icourse163.org/course/detail.htm?cid=1002535001 （中国大学MOOC；mathTopic，第 5–6 阶段为主，附带第 4 阶段；开课高校未确认——课程页文字版全文、标题栏均未出现高校名，未猜一所填上去）
+  - M4 高等数学（一） https://www.icourse163.org/course/NJTECH-1449608162 （中国大学MOOC · 南京工业大学；mathTopic，第 1–4 阶段；5 条 points，第 5 条写明已结课 2025/08/24–2026/01/09、回放是否可看未验证，未写“可回放”）
+- NOT added: B1 清华《生活英语听说》（学堂在线 https://next.xuetangx.com/course/THU05021000376/1515481）——链接为 2020 年旧学期链接，本次抓取超时未直接验证，需浏览器点开复核最新链接后再补。福州大学《网络空间安全概论》与上交《信息安全数学基础》仍不加（沿用本轮前的决定）。
+- Counts synced: 数组 15 → 25 项；合并精选 22 → 32 条（随时可学精选 25 + AI 精选 7）；数组头注释、去重注释与 getLearning 描述同步改；getLearning 描述的 englishTopic/mathTopic 段落重写（英语 7 门、数学 6 门，含 Tier 2 批准与费用口径）。CURATED_LEARNING_AI、定时刷新、置顶区、江西栏、2028 四项、健身栏均未碰。
+- Client notes synced (otherwise stale): `EnglishTopicNote` 的“只有口语课 / 本轮没有核实到”一句改为 5 门专升本英语 + 2 门日常英语及平台免费口径说明；`MathTopicNote` 的覆盖句补上同济（一）/（二）、南京工大（一）、高等数学（下）的阶段覆盖。
+- Hard rules kept: fee 未硬写「免费」二字作课程页证据；无「附答案」；无任何条目标为「江西专升本真题」。
+- Caveats: A4 /course/ 链接需人工点开复核；M3 开课高校未确认；M4 已结课、回放未验证。
+
+- 自托管同步说明：Muse 侧本轮删掉了 `client/src/App.tsx` 的无引用死代码 `HeroStory`（今日头条组件，tsc TS6133）；自托管副本里该组件本就不存在，无需删除；同步后服务端与客户端 tsc 仍需验证干净。
