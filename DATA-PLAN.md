@@ -392,3 +392,9 @@ Imagery not needed: a text-first broadsheet news page — headlines, rankings an
 - 计数出入：简报按原有 7 项算 13，实际数组只有 6 项（北理工 smartedu 入口早前去重时已从 Muse 侧数组移出，自建版此前仍保留），故本数组现共 12 项（6 旧＋6 新），合并列表 19 项、AI 筛选仍 7 项，与 Muse 侧一致。删除 smartedu 入口后合并总数不变（去重本就会去掉它）。
 - 未入库（需浏览器实点确认免费标识后再议）：C 语言入门浙大翁恺、现代密码学电子科大、数据结构浙大宁波理工、同济高数（一）（二）、中南综合英语——MOOC/智慧平台文字版抓取不到“免费”字样（页头信息栏被 strip），免费证据为平台模式间接推断；另有网络攻防（深圳信息职大）与英语词汇与文化（暨南）因开课日期未核实暂不推荐；江西官网首页文字版未显示新闻列表，“无新增”结论以站内搜索＋关键词搜索为准，建议浏览器实访专升本栏目最终确认，12 月再查 2027 年实施方案。
 - Verification (Muse 侧 live getLearning 复核：19 条；6 项新条目字段与简报一致；BIT 只剩 AI 的 MOOC 一条；近期可报名仍空）。服务端与客户端 `tsc --noEmit` 干净。
+
+## 学习栏第二轮扩充：哈佛 CS50 网络安全＋思科入门 (2026-11-26, Muse v70)
+- Brief: 同日第一轮（v69，6 项）之后，用户批准的 4 个候选中只加已核实免费的 2 项：哈佛 CS50's Introduction to Cybersecurity、思科 Introduction to Cybersecurity。福州大学《网络空间安全概论》与上交《信息安全数学基础》未通过 matcher（条目文本无免费证据），不加。江西栏本轮无新增。
+- Change 1 (`server/src/actions.ts`): `CURATED_LEARNING_ANYTIME` 末尾（《高等数学（一）》之后）新增 2 项：哈佛 CS50's Introduction to Cybersecurity（cs50.harvard.edu/cybersecurity/#how-to-take-this-course，哈佛大学 CS50，5 周、无先修、OCW 免费学、交作业需免费 edX 账号、verified 证书付费，全英文）；思科 Introduction to Cybersecurity（cisco.com 概览页 https://www.cisco.com/site/us/en/learn/training-certifications/training/netacad/index.html ，思科 Networking Academy，初级、约 6 小时自定进度、官网写明免费、需免费注册 NetAcad 账号、Credly 数字徽章，全英文；未用第三方跳转链接）。每项带 startHint、fee 含免费、group=anytime、publishedAt=null。本数组 12 项 → 14 项，`getLearning` 描述“twelve”改为“fourteen”，去重说明“合并列表 19 条”改为“合并列表 21 条、AI 筛选仍 7 条”；随时可学精选顶部注释补第二轮扩充说明（含福州/上交不加的原因）。
+- Matching test (`bun round2-check.ts`，/tmp 副本从工作副本 `actions.ts` 直接 import 真实的 `CURATED_LEARNING_ANYTIME` / `CURATED_LEARNING_AI` / `collapseSameCourseEntries`）：22/22 通过——随时可学精选 14 项、AI 精选 7 项、合并去重 21 项、AI 筛选 7 项；2 项新条目标题/链接/来源/group/fee/startHint 全对，思科链接为 cisco.com 概览页、无 safelinks 跳转；福州大学与上交条目均未出现；全部 14 项 group=anytime；2 项新条目恰为数组末两位。服务端与客户端 `tsc --noEmit` 干净（/tmp 副本）。
+- Verification (Muse 侧 live getLearning 复核：21 条；2 项新条目字段与简报一致；AI 筛选仍 7 条；近期可报名仍空）。
