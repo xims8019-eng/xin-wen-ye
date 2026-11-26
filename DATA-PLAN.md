@@ -433,3 +433,11 @@ Imagery not needed: a text-first broadsheet news page — headlines, rankings an
 - Caveats: A4 /course/ 链接需人工点开复核；M3 开课高校未确认；M4 已结课、回放未验证。
 
 - 自托管同步说明：Muse 侧本轮删掉了 `client/src/App.tsx` 的无引用死代码 `HeroStory`（今日头条组件，tsc TS6133）；自托管副本里该组件本就不存在，无需删除；同步后服务端与客户端 tsc 仍需验证干净。
+
+## M4 去重误判修复：同名课按学校区分 (Variant B2) (2026-11-26 edit)
+- Brief: 用户 2026-11-26 23:19 选定方案 B（改规则，让不同学校的同名课都保留）。生产站 getLearning 只有 31 条、数学筛选只有 5 条，Muse 侧（v74）32 条、数学 6 条——M4 南京工大《高等数学（一）》https://www.icourse163.org/course/NJTECH-1449608162 被自托管 `collapseSameCourseEntries` 误去重。
+- Root cause: 旧去重键 = 归一化标题（去标点/空白/横线变体）＋标题末尾括号里的学校。M1 同济《高等数学（一）》与 M4 南京工大《高等数学（一）》标题里都没有学校，core 相同、学校都为空，键完全相同，于是 M4 被当作 M1 的重复入口丢掉。Muse 侧没有 `collapseSameCourseEntries`，所以显示正常。
+- Fix — Variant B2 (`collapseSameCourseEntries`，server/src/actions.ts 2184–2208 行，函数上方注释 2170–2172 行与 getLearning 描述串 7739 行同步改）：泛型约束放宽为 `T extends { title: string; source?: string | null; aiTopic?: boolean }`；新增 `titleSchoolOf` / `schoolOfSource` / `schoolOf`，新键为 `core|schoolOf(it)`——标题学校优先，否则取来源末段（`·` 或 `/` 之后）学校，均过 `/大学|学院|学校/` 门控（两处都不满足时回落为标题学校，可能为空）；core 正则、aiTopic 胜出规则、顺序保持逻辑一字未动。调用点仍为 2625 行（loadLearning 入库）与 7817 行（getLearning 读回）两处。
+- Matcher 测试结论：真实数组验证——合并总数 32、数学 6、英语 7、AI 7；M1 同济与 M4 南京工大都在；逐项对照旧函数，唯一差异是 M4 恢复（北理工《网络安全——应用技术与工程实践》仍只保留带 aiTopic 的 MOOC 条目，去重本身未松动）。
+- 未改动：任何课程标题、fee/points 文案、定时刷新、置顶区、江西栏、2028 四项、健身栏；未加福州大学/上交。服务端与客户端 tsc 已验证干净。
+- Muse 侧无需改动：Muse artifact（slug xin-wen-ye）当前 v74，live getLearning 32 条、数学筛选 6 条，Muse 侧没有等价去重函数，本轮 Muse 不发新版。
