@@ -495,7 +495,16 @@ function DeadlineAlerts({ deadlines }: { deadlines: LearningItem[] }) {
   );
 }
 
-type LearningTopic = "all" | "ai";
+type LearningTopic = "all" | "ai" | "english" | "math";
+
+type LearningItemLike = { aiTopic?: boolean; englishTopic?: boolean; mathTopic?: boolean };
+
+function matchesTopic(item: LearningItemLike, topic: LearningTopic): boolean {
+  if (topic === "all") return true;
+  if (topic === "ai") return item.aiTopic === true;
+  if (topic === "english") return item.englishTopic === true;
+  return item.mathTopic === true;
+}
 
 function LearningTopicFilter({
   topic,
@@ -507,6 +516,8 @@ function LearningTopicFilter({
   const chips: Array<{ id: LearningTopic; label: string }> = [
     { id: "all", label: "全部话题" },
     { id: "ai", label: "AI 学习" },
+    { id: "english", label: "英语" },
+    { id: "math", label: "高等数学" },
   ];
   return (
     <div className="mt-4 flex flex-wrap gap-2" role="tablist" aria-label="学习话题筛选">
@@ -545,6 +556,26 @@ function AiLearningNote() {
   );
 }
 
+function EnglishTopicNote() {
+  return (
+    <div className="mt-3 rounded-[var(--radius)] bg-[var(--space-surface-alt)] p-3 text-sm leading-relaxed text-[var(--dim)]" role="note" aria-label="英语筛选说明">
+      <p>
+        英语分<span className="font-medium text-[var(--text)]">专升本英语</span>和<span className="font-medium text-[var(--text)]">日常英语</span>两个方向。按江西 2026 年考试说明（往年参考，2028 版尚未发布），专升本英语考词汇与结构、阅读理解、完形填空、段落翻译和写作，<span className="font-medium text-[var(--text)]">不考听力和口语</span>——听力口语资源只归日常英语，不标为对齐考试。目前带此筛选的只有日常英语方向的口语课；对齐考试说明的专升本英语课程和练习，本轮没有核实到符合免费规则的，先不硬凑。
+      </p>
+    </div>
+  );
+}
+
+function MathTopicNote() {
+  return (
+    <div className="mt-3 rounded-[var(--radius)] bg-[var(--space-surface-alt)] p-3 text-sm leading-relaxed text-[var(--dim)]" role="note" aria-label="高等数学筛选说明">
+      <p>
+        高数按江西《高等数学及其应用》考试说明的官方顺序共 <span className="font-medium text-[var(--text)]">6 个阶段</span>：函数、极限和连续 → 一元函数微分学 → 一元函数积分学 → 常微分方程 → 多元函数微分学 → 二重积分。江苏农林《高等数学（一）》覆盖第 1–3 阶段，可汗学院中文站覆盖全部 6 阶段；每张卡片都写了第一次打开从哪节开始。2028 年考试说明发布后再按新版调整。
+      </p>
+    </div>
+  );
+}
+
 function LearningSection({ onGoLearning }: { onGoLearning: () => void }) {
   const queryClient = useQueryClient();
   const learning = useQuery({ queryKey: ["learning"], queryFn: () => api.getLearning({ force: false }) });
@@ -557,7 +588,7 @@ function LearningSection({ onGoLearning }: { onGoLearning: () => void }) {
     onError: () => {},
   });
   const [topic, setTopic] = useState<LearningTopic>("all");
-  const allItems = (learning.data?.items ?? []).filter((it) => topic === "all" || it.aiTopic === true);
+  const allItems = (learning.data?.items ?? []).filter((it) => matchesTopic(it, topic));
   const anytime = allItems.filter((it) => it.group === "anytime");
   const upcoming = allItems.filter((it) => it.group === "upcoming");
   const others = allItems.filter((it) => it.group !== "anytime" && it.group !== "upcoming");
@@ -585,6 +616,8 @@ function LearningSection({ onGoLearning }: { onGoLearning: () => void }) {
 
       <LearningTopicFilter topic={topic} onChange={setTopic} />
       {topic === "ai" ? <AiLearningNote /> : null}
+      {topic === "english" ? <EnglishTopicNote /> : null}
+      {topic === "math" ? <MathTopicNote /> : null}
 
       {topic === "all" ? (
         <div className="mt-4">
@@ -654,7 +687,7 @@ function LearningView() {
     onError: () => {},
   });
   const [topic, setTopic] = useState<LearningTopic>("all");
-  const items = (learning.data?.items ?? []).filter((it) => topic === "all" || it.aiTopic === true);
+  const items = (learning.data?.items ?? []).filter((it) => matchesTopic(it, topic));
   const anytime = items.filter((it) => it.group === "anytime");
   const upcoming = items.filter((it) => it.group === "upcoming");
   const others = items.filter((it) => it.group !== "anytime" && it.group !== "upcoming");
@@ -680,6 +713,8 @@ function LearningView() {
 
       <LearningTopicFilter topic={topic} onChange={setTopic} />
       {topic === "ai" ? <AiLearningNote /> : null}
+      {topic === "english" ? <EnglishTopicNote /> : null}
+      {topic === "math" ? <MathTopicNote /> : null}
 
       {topic === "all" ? (
         <div className="mt-4">

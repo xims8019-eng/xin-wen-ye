@@ -5204,6 +5204,10 @@ const learningItemSchema = z.object({
   group: z.enum(["anytime", "upcoming"]).nullable().default(null),
   /** True only for the hand-verified AI-learning curated courses — drives the 「AI 学习」 topic filter (2026-11-23). Pool items never carry it, so the Coursera blog stays out of the AI filter by construction. */
   aiTopic: z.boolean().optional(),
+  /** True only for hand-verified English curated courses — drives the 「英语」 topic filter (2026-11-26). Pool items never carry it. */
+  englishTopic: z.boolean().optional(),
+  /** True only for hand-verified 高等数学 curated courses — drives the 「高等数学」 topic filter (2026-11-26). Pool items never carry it. */
+  mathTopic: z.boolean().optional(),
 });
 
 const jiangxiItemSchema = z.object({
@@ -5402,7 +5406,7 @@ const JIANGXI_ARCHIVE_ITEMS: JiangxiArchiveItem[] = [
 // practice and a university lecture recording. Every URL was opened and
 // checked by the researcher; each carries a startHint naming the first
 // lesson or exercise. publishedAt is null: these are standing resources,
-// not news. 2026-11-26 扩充：新增 6 项已核实免费资源（哈佛 CS50x、freeCodeCamp、TryHackMe 免费房间、PortSwigger Web 安全学院、MIT OCW 6.858 进阶、江苏农林高等数学（一）），本数组共 12 项；同日第二轮扩充又新增 2 项已核实免费资源（哈佛 CS50's Introduction to Cybersecurity、思科 Introduction to Cybersecurity），本数组共 14 项。福州大学《网络空间安全概论》与上交《信息安全数学基础》未通过 matcher（条目文本无免费证据），不加；北理工 smartedu 入口已从本数组移出（与 AI 精选的 MOOC 入口为同一门课，去重后只留一处），合并列表 21 项、AI 筛选仍 7 项。 「近期可报名」 has NO curated entries this round — the check
+// not news. 2026-11-26 扩充：新增 6 项已核实免费资源（哈佛 CS50x、freeCodeCamp、TryHackMe 免费房间、PortSwigger Web 安全学院、MIT OCW 6.858 进阶、江苏农林高等数学（一）），本数组共 12 项；同日第二轮扩充又新增 2 项已核实免费资源（哈佛 CS50's Introduction to Cybersecurity、思科 Introduction to Cybersecurity），本数组共 15 项。福州大学《网络空间安全概论》与上交《信息安全数学基础》未通过 matcher（条目文本无免费证据），不加；北理工 smartedu 入口已从本数组移出（与 AI 精选的 MOOC 入口为同一门课，去重后只留一处），合并列表 22 项、AI 筛选仍 7 项。同日第三轮扩充（英语/高数筛选）：新增可汗学院中文站 1 项（mathTopic，覆盖高数全部 6 阶段）；国防科大《大学英语（口语）》补 englishTopic（日常英语方向），江苏农林《高等数学（一）》补 mathTopic（高数路线第 1–3 阶段）。 「近期可报名」 has NO curated entries this round — the check
 // found no official page explicitly open for free registration, so that
 // group honestly stays empty (pool items can still land there via the
 // deadlines rule in getLearning).
@@ -5472,7 +5476,12 @@ export const CURATED_LEARNING_ANYTIME: CuratedLearningItem[] = [
     category: "courses",
     summaryZh:
       "练口语和日常话题的大学英语公开课，国防科技大学刘源源开设；开课中，2026/10/22 起；100 万+人选课；适用对象为有一定英语基础、希望在口语单项上有所突破的学生。",
-    points: ["学习视频免费，需免费注册账号选课。", "开课中：2026/10/22 起；100 万+人选课。"],
+    points: [
+      "方向：日常英语（2026 年考试说明不考听力口语，这门课练日常口语）",
+      "学习视频免费，需免费注册账号选课。",
+      "开课中：2026/10/22 起；100 万+人选课。",
+    ],
+    englishTopic: true,
     relevance: "适合有一定英语基础、想练口语的专科在读生，能直接选课从日常话题开始练。",
     startHint: "从 Week 1 Unit 1《Hometown》开始（接着是 Unit 2 Campus life）",
     fee: "免费",
@@ -5724,6 +5733,7 @@ export const CURATED_LEARNING_ANYTIME: CuratedLearningItem[] = [
       "按江苏省专转本《高等数学》考试大纲设置，与江西《高等数学及其应用》前半部分高度重合，但以江西考试说明为准对照取舍；本课只覆盖一元微积分，不含常微分方程、多元微分、二重积分。",
     ],
     relevance: "适合备考专升本的专科在读生，按专升本大纲编排的一元微积分课，能直接选课从函数开始学。",
+    mathTopic: true,
     startHint: "从第 1 周“函数、极限与连续（一）”开始",
     fee: "免费（需免费注册；认证证书付费）",
     needsApplication: false,
@@ -5791,6 +5801,40 @@ export const CURATED_LEARNING_ANYTIME: CuratedLearningItem[] = [
     enrichState: "stored",
     group: "anytime",
     audienceStage: "专科在读",
+  },
+  {
+    title: "可汗学院中文站（微分学 / 积分学 / 多变量微积分）",
+    url: "https://zh.khanacademy.org/",
+    readUrl: "https://zh.khanacademy.org/",
+    officialUrl: "https://zh.khanacademy.org/",
+    source: "可汗学院（非营利）",
+    publishedAt: null,
+    category: "courses",
+    summaryZh:
+      "免费的数学讲解+练习平台，中文界面：微分学、积分学、多变量微积分覆盖江西《高等数学及其应用》全部 6 个阶段；每技能做对 4 题中的 3 题升级，做题即时反馈+提示，另有测验与单元测试；视频为英文讲解配中文字幕/中文讲稿，练习题为中文。",
+    points: [
+      "免费：首页写明‘免费在线课程，讲解以及练习’‘对学生、教师和家庭永远免费’。",
+      "第 1 阶段（函数、极限和连续）：站内进‘微分学 Unit 1 极限与连续’。",
+      "第 2 阶段（一元函数微分学）：导数的定义视频（中文字幕）https://zh.khanacademy.org/math/differential-calculus/dc-diff-intro/dc-derivative-intro/v/calculus-derivatives-2-5-new-hd-version ；函数分析单元（中值定理、极值、单调、凹凸拐点）https://zh.khanacademy.org/math/differential-calculus/dc-analytic-app/dc-candidates-test 。",
+      "第 3 阶段（一元函数积分学）：积分单元 https://zh.khanacademy.org/math/integral-calculus/ic-integration/ic-common-indefinite-integrals 。",
+      "第 4 阶段（常微分方程）：站内进‘积分学·微分方程’。",
+      "第 5 阶段（多元函数微分学）：站内进‘多变量微积分·偏导数’。",
+      "第 6 阶段（二重积分）：双积分文章 https://zh.khanacademy.org/math/multivariable-calculus/integrating-multivariable-functions/double-integrals-a/a/double-integrals ，含‘自己试试！’练习。",
+      "注意：从中国访问可能加载偏慢，视频流畅播放未实测。",
+    ],
+    relevance: "适合按江西《高等数学及其应用》顺序自学的专科在读生，6 个阶段都有讲解+即时反馈练习，能直接从第 1 阶段开始。",
+    startHint: "从‘微分学 Unit 1 极限与连续’开始（第 1 阶段）",
+    fee: "免费",
+    needsApplication: false,
+    deadline: null,
+    needsLogin: false,
+    blockedReason: null,
+    chineseUrl: null,
+    titleOnly: false,
+    enrichState: "stored",
+    group: "anytime",
+    audienceStage: "专科在读",
+    mathTopic: true,
   },
 ];
 
@@ -7377,7 +7421,7 @@ export const Actions = {
 
   getLearning: defineAction({
     description:
-      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生； since 2026-11-23 the stage signals — middle school(s), 中小学， 初中， 高中生， 中六， JUPAS, DSE, 研究生/硕士研究生 — are matched against title + summary + points + audienceStage together, so an item whose stage is stated only in its body, e.g. an HKU undergraduate item naming JUPAS/中六 in its points, is excluded too), pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships), activity write-ups whose summary dates the event in the past (\"X月X日……举行/举办/召开\" with no replay and no sign-up, e.g. the 东湖大咖公开课 report), 专硕/学硕 master's-stage items (e.g. the 专硕 dorm-policy news), scholarships limited to one local school district's students or to high-school students only (school district / juniors and seniors / high school football / high school athlete / 学区 / 高中生， e.g. the St. Joseph scholarship and the People high-school athlete scholarship story) and expired intakes are all filtered out, so the list may honestly be empty. 自 2026-11-23 起另有两条规则：只有宣传博客、限时试听或无法核实免费范围的内容不进学习栏（课程卡必须直接链接到可免费学习的具体课程、练习或讲座回放；免费注册、仅证书收费的课程保留）；已发放/已颁发类报道不进可报名列表且 needsApplication 纠正为 false，只有官方页面确认报名已开放、报名免费且申请范围包含中国专科在读生时才列入，官方明确滚动报名或常年开放的项目即使没有截止日期也可保留。 HTML entities (&#…; and &…;, incl. double-encoded forms) are decoded in titles, points and summaries at ingest and on every read (2026-11-23), and an unenriched item's summary/relevance line is rebuilt from complete sentences of its own source summary — never cut mid-sentence and never a fabricated translation. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip. Since 2026-11-23 the list is split into two display groups via each item's group field: fourteen hand-verified free resources that can be started right now (CURATED_LEARNING_ANYTIME — 网络安全/英语公开课， authorised CTF practice, a Cambridge lecture recording, plus CS50/编程、Web 安全实训、高等数学； each with a startHint naming the first lesson or exercise) lead the items array as group=anytime, followed by pool courses/resources (also anytime); pool opportunities with a deadline in the next 30 days and a confirmed official entry are group=upcoming （近期可报名）; a rolling / long-term-open opportunity in the 近期可报名 class is group=upcoming even without a deadline, and after the z-round two-class gate no pool item keeps group=null. The curated 近期可报名 set is empty this round — no official page was verified as explicitly open and free — so that group may honestly show its empty state. 自 2026-11-23 起，池内条目只有含真实可学内容（课程/讲座/回放/练习/实验）才进随时可学；纯政策新闻（征求意见稿、管理条例/办法类通知，如《教材管理条例（征求意见稿）》）由学习栏规则滤掉，永不为 group=anytime。自 2026-11-23 起另有 7 门人工核实的免费中文 AI 课程（CURATED_LEARNING_AI）作为持久精选随随时可学一同返回，每门带 aiTopic=true 供客户端的「AI 学习」话题筛选使用（能学什么/需要什么基础/从哪一课开始都写在卡上；全部免费学习、需免费注册、仅认证证书付费）；池内条目永不带 aiTopic。自 2026-11-23 起，Coursera 博客《Introducing AI Series on Coursera》（背后是 Coursera Plus 付费订阅、无单门免费带中文字幕课程、面向在职人士）由宣传博客规则从学习栏整个移除，不再保留随时可学位置；吴恩达《AI for Everyone》因只有非官方搬运、正版免费旁听与中文字幕未核实而不收录。自 2026-11-24 起另有一条确定性规则：标题含「夜校」、费用未说明、无 startHint、无截止日期且链接不在课程/学习平台域名上的条目，按纯新闻滤掉（如广州日报大洋网的青年夜校生活方式报道——没有任何具体课程、报名入口或免费学习入口）；带费用说明或开始提示的真实夜校课程不受影响。自 2026-11-24 起另有两类守门规则（z-round）：池内条目只有符合随时可学（有明确的免费课程、练习或回放入口；免费注册、仅证书收费保留）或近期可报名（有主办方官方报名入口、确认当前开放、报名免费且专科在读符合条件；官方明确长期/滚动开放的项目可以没有截止日期）才保留，两类都不满足的条目从学习列表彻底移除，不再进入「其他学习机会」；仅 needsApplication=true、未核实费用的招生/奖学金汇总、已颁发获奖名单、论坛邀请、博客文章和天气新闻等均被滤掉。自 2026-11-24 起再收紧（aa-round）：opportunities 类条目只能经「近期可报名」类合格，不能再靠「随时可学」的文本碎片混入后以 group=null 落进「其他学习机会」；随时可学的免费证据须由 免费 直接绑定课程/练习/回放等可学入口（裸「免费开放」和「免费…（隔字）…课程」不再算数），可学信号不再认裸字「课」（停课不算课程）；标题为天气/气象预报预警类且无自身学习入口的条目按纯新闻滤掉；汇总/盘点类标题不算单项官方报名入口，Outlook safelinks 跳转链接不算主办方官方入口，范围证据里的裸「不限」须为学历/专业/学校/年级不限才算。学习缓存键升至 learning:all:v3，旧缓存不再被读到。自 2026-11-24 起同一课程在两个平台的入口去重（`collapseSameCourseEntries`，入库 `loadLearning` 与每次 `getLearning` 读回都执行，`getDailyDigest` 经 `loadLearning` 同样去重）：北理工《网络安全——应用技术与工程实践》曾在学堂在线与 MOOC 各有一条精选，去重只保留带 `aiTopic` 的 MOOC 条目（2026-11-26 起学堂在线入口已从随时可学精选移出）；合并列表 21 条、AI 筛选仍 7 条；去重键为归一化标题（去标点/空白/横线变体）＋标题末尾括号里的学校。",
+      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生； since 2026-11-23 the stage signals — middle school(s), 中小学， 初中， 高中生， 中六， JUPAS, DSE, 研究生/硕士研究生 — are matched against title + summary + points + audienceStage together, so an item whose stage is stated only in its body, e.g. an HKU undergraduate item naming JUPAS/中六 in its points, is excluded too), pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships), activity write-ups whose summary dates the event in the past (\"X月X日……举行/举办/召开\" with no replay and no sign-up, e.g. the 东湖大咖公开课 report), 专硕/学硕 master's-stage items (e.g. the 专硕 dorm-policy news), scholarships limited to one local school district's students or to high-school students only (school district / juniors and seniors / high school football / high school athlete / 学区 / 高中生， e.g. the St. Joseph scholarship and the People high-school athlete scholarship story) and expired intakes are all filtered out, so the list may honestly be empty. 自 2026-11-23 起另有两条规则：只有宣传博客、限时试听或无法核实免费范围的内容不进学习栏（课程卡必须直接链接到可免费学习的具体课程、练习或讲座回放；免费注册、仅证书收费的课程保留）；已发放/已颁发类报道不进可报名列表且 needsApplication 纠正为 false，只有官方页面确认报名已开放、报名免费且申请范围包含中国专科在读生时才列入，官方明确滚动报名或常年开放的项目即使没有截止日期也可保留。 HTML entities (&#…; and &…;, incl. double-encoded forms) are decoded in titles, points and summaries at ingest and on every read (2026-11-23), and an unenriched item's summary/relevance line is rebuilt from complete sentences of its own source summary — never cut mid-sentence and never a fabricated translation. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip. Since 2026-11-23 the list is split into two display groups via each item's group field: fifteen hand-verified free resources that can be started right now (CURATED_LEARNING_ANYTIME — 网络安全/英语公开课， authorised CTF practice, a Cambridge lecture recording, plus CS50/编程、Web 安全实训、高等数学； each with a startHint naming the first lesson or exercise) lead the items array as group=anytime, followed by pool courses/resources (also anytime); pool opportunities with a deadline in the next 30 days and a confirmed official entry are group=upcoming （近期可报名）; a rolling / long-term-open opportunity in the 近期可报名 class is group=upcoming even without a deadline, and after the z-round two-class gate no pool item keeps group=null. The curated 近期可报名 set is empty this round — no official page was verified as explicitly open and free — so that group may honestly show its empty state. 自 2026-11-23 起，池内条目只有含真实可学内容（课程/讲座/回放/练习/实验）才进随时可学；纯政策新闻（征求意见稿、管理条例/办法类通知，如《教材管理条例（征求意见稿）》）由学习栏规则滤掉，永不为 group=anytime。自 2026-11-23 起另有 7 门人工核实的免费中文 AI 课程（CURATED_LEARNING_AI）作为持久精选随随时可学一同返回，每门带 aiTopic=true 供客户端的「AI 学习」话题筛选使用（能学什么/需要什么基础/从哪一课开始都写在卡上；全部免费学习、需免费注册、仅认证证书付费）；池内条目永不带 aiTopic。自 2026-11-23 起，Coursera 博客《Introducing AI Series on Coursera》（背后是 Coursera Plus 付费订阅、无单门免费带中文字幕课程、面向在职人士）由宣传博客规则从学习栏整个移除，不再保留随时可学位置；吴恩达《AI for Everyone》因只有非官方搬运、正版免费旁听与中文字幕未核实而不收录。自 2026-11-24 起另有一条确定性规则：标题含「夜校」、费用未说明、无 startHint、无截止日期且链接不在课程/学习平台域名上的条目，按纯新闻滤掉（如广州日报大洋网的青年夜校生活方式报道——没有任何具体课程、报名入口或免费学习入口）；带费用说明或开始提示的真实夜校课程不受影响。自 2026-11-24 起另有两类守门规则（z-round）：池内条目只有符合随时可学（有明确的免费课程、练习或回放入口；免费注册、仅证书收费保留）或近期可报名（有主办方官方报名入口、确认当前开放、报名免费且专科在读符合条件；官方明确长期/滚动开放的项目可以没有截止日期）才保留，两类都不满足的条目从学习列表彻底移除，不再进入「其他学习机会」；仅 needsApplication=true、未核实费用的招生/奖学金汇总、已颁发获奖名单、论坛邀请、博客文章和天气新闻等均被滤掉。自 2026-11-24 起再收紧（aa-round）：opportunities 类条目只能经「近期可报名」类合格，不能再靠「随时可学」的文本碎片混入后以 group=null 落进「其他学习机会」；随时可学的免费证据须由 免费 直接绑定课程/练习/回放等可学入口（裸「免费开放」和「免费…（隔字）…课程」不再算数），可学信号不再认裸字「课」（停课不算课程）；标题为天气/气象预报预警类且无自身学习入口的条目按纯新闻滤掉；汇总/盘点类标题不算单项官方报名入口，Outlook safelinks 跳转链接不算主办方官方入口，范围证据里的裸「不限」须为学历/专业/学校/年级不限才算。学习缓存键升至 learning:all:v3，旧缓存不再被读到。自 2026-11-24 起同一课程在两个平台的入口去重（`collapseSameCourseEntries`，入库 `loadLearning` 与每次 `getLearning` 读回都执行，`getDailyDigest` 经 `loadLearning` 同样去重）：北理工《网络安全——应用技术与工程实践》曾在学堂在线与 MOOC 各有一条精选，去重只保留带 `aiTopic` 的 MOOC 条目（2026-11-26 起学堂在线入口已从随时可学精选移出）；合并列表 22 条、AI 筛选仍 7 条；去重键为归一化标题（去标点/空白/横线变体）＋标题末尾括号里的学校。",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
