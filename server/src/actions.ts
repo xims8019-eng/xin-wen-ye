@@ -4054,7 +4054,7 @@ function sameOverseasEvent(a: OverseasItem, b: OverseasItem): boolean {
  * Statistics-only visa news never pins (user rule, 2026-11-23): the fixed
  * zone is for policy CHANGES — a rule that actually moved, with what
  * changed and when it takes effect. A kind=news item whose substance is
- * visa DATA moving (application volumes, refusal / approval rates going
+ * visa DATA moving (application / issuance volumes （申请量/发放量/签发量）, refusal / approval rates going
  * up or down) changes no rule, and neither does an item whose only
  * forward-looking content is a measure merely proposed / warned of, with
  * no enacted change and no effective date: the Times of India piece on UK
@@ -4076,7 +4076,7 @@ export function isVisaStatisticsOnlyNews(it: OverseasItem): boolean {
   const text = `${it.title} ${it.whatChanged ?? ""} ${it.points.join(" ")}`;
   // A signal is required: visa statistics moving, or a proposal-only item.
   const statsZh =
-    /(申请量|申请人数|申请数|拒签率|获签率|获批率|批准率|通过率)/.test(text) &&
+    /(申请量|申请人数|申请数|拒签率|获签率|获批率|批准率|通过率|发放量|签发量)/.test(text) &&
     /(下降|上升|增长|减少|同比|环比|%|％)/.test(text);
   const statsEn =
     /\b(visa applications?|visa refusals?|visa approvals?|visa grants?|application volumes?)\b/i.test(text) &&
@@ -6753,8 +6753,10 @@ function normalizeOverseas(raw: OverseasItem): z.infer<typeof overseasItemSchema
     // waiting for the next re-fetch or the pinned-store rewrite. The item
     // itself stays in the pool. getDailyDigest reads through this same
     // normalize, so the homepage digest shares the pin decision.
+    // 统计新闻同理（user rule, 2026-11-23/2026-11-26）：kind=news 且仅为签证数据变动、无规则变更、无带日期生效变更的条目，缓存仍带 pinned=true 时也在每次读回时纠正为 false，条目本身留在池内。
     pinned:
       it.pinned &&
+      !isVisaStatisticsOnlyNews({ ...it, kind }) &&
       !isPolicyWithoutDatedEffectiveChange({
         kind,
         decisionDateLabel: it.decisionDateLabel ?? null,
