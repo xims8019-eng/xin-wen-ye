@@ -5420,7 +5420,7 @@ const JIANGXI_ARCHIVE_ITEMS: JiangxiArchiveItem[] = [
 // practice and a university lecture recording. Every URL was opened and
 // checked by the researcher; each carries a startHint naming the first
 // lesson or exercise. publishedAt is null: these are standing resources,
-// not news. 2026-11-26 扩充：新增 6 项已核实免费资源（哈佛 CS50x、freeCodeCamp、TryHackMe 免费房间、PortSwigger Web 安全学院、MIT OCW 6.858 进阶、江苏农林高等数学（一）），本数组共 12 项；同日第二轮扩充又新增 2 项已核实免费资源（哈佛 CS50's Introduction to Cybersecurity、思科 Introduction to Cybersecurity），本数组共 15 项。福州大学《网络空间安全概论》与上交《信息安全数学基础》未通过 matcher（条目文本无免费证据），不加；北理工 smartedu 入口已从本数组移出（与 AI 精选的 MOOC 入口为同一门课，去重后只留一处），合并列表 32 项、AI 筛选仍 7 项。同日第三轮扩充（英语/高数筛选）：新增可汗学院中文站 1 项（mathTopic，覆盖高数全部 6 阶段）；国防科大《大学英语（口语）》补 englishTopic（日常英语方向），江苏农林《高等数学（一）》补 mathTopic（高数路线第 1–3 阶段）。同日第四轮扩充（英语/高数 Tier 2，用户 22:54 批准「加上，标清平台免费」）：再新增 10 项 MOOC 课（A1–A5 专升本英语、B2 日常英语听力、M1–M4 高数），本数组共 25 项；费用口径统一为「平台课程学习免费，仅认证证书付费」，每条 points 末尾照抄完整批准句（课程页未写‘免费’二字）。清华《生活英语听说》因链接未验证暂缓，不加。 「近期可报名」 has NO curated entries this round — the check
+// not news. 2026-11-26 扩充：新增 6 项已核实免费资源（哈佛 CS50x、freeCodeCamp、TryHackMe 免费房间、PortSwigger Web 安全学院、MIT OCW 6.858 进阶、江苏农林高等数学（一）），本数组共 12 项；同日第二轮扩充又新增 2 项已核实免费资源（哈佛 CS50's Introduction to Cybersecurity、思科 Introduction to Cybersecurity），本数组共 15 项。福州大学《网络空间安全概论》与上交《信息安全数学基础》未通过 matcher（条目文本无免费证据），不加；北理工 smartedu 入口已从本数组移出（与 AI 精选的 MOOC 入口为同一门课，去重后只留一处），合并列表 34 项、AI 筛选仍 7 项。同日第三轮扩充（英语/高数筛选）：新增可汗学院中文站 1 项（mathTopic，覆盖高数全部 6 阶段）；国防科大《大学英语（口语）》补 englishTopic（日常英语方向），江苏农林《高等数学（一）》补 mathTopic（高数路线第 1–3 阶段）。同日第四轮扩充（英语/高数 Tier 2，用户 22:54 批准「加上，标清平台免费」）：再新增 10 项 MOOC 课（A1–A5 专升本英语、B2 日常英语听力、M1–M4 高数），本数组共 25 项；费用口径统一为「平台课程学习免费，仅认证证书付费」，每条 points 末尾照抄完整批准句（课程页未写‘免费’二字）。清华《生活英语听说》因链接未验证暂缓，不加。同日第五轮扩充（江西理工高数，用户 23:25 批准「加江西理工那两门，标清是通用课」）：再新增 2 项智慧教育平台/学银在线课程（江西理工大学《高等数学（一）》《高等数学（二）》，mathTopic，第 1–3 / 第 4–6 阶段），本数组共 27 项；费用口径按课程页原文核实：课程页未写‘免费’二字、也未标价，平台课程学习免费，证书是否收费未说明；（二）已结课、回放未确认；两门均为江西高校通用高数课，绝不标成“江西专升本高数课”。 「近期可报名」 has NO curated entries this round — the check
 // found no official page explicitly open for free registration, so that
 // group honestly stays empty (pool items can still land there via the
 // deadlines rule in getLearning).
@@ -6141,6 +6141,71 @@ export const CURATED_LEARNING_ANYTIME: CuratedLearningItem[] = [
     relevance: "适合想一门课覆盖高数第 1–4 阶段的专科在读生，起点只需高中数学基础，能直接从第零章预备知识开始。",
     startHint: "第零章 预备知识（函数复习）→ 第一章 1.1 数列的极限",
     fee: "平台课程学习免费，仅认证证书付费",
+    needsApplication: false,
+    deadline: null,
+    needsLogin: false,
+    blockedReason: null,
+    chineseUrl: null,
+    titleOnly: false,
+    enrichState: "stored",
+    group: "anytime",
+    audienceStage: "专科在读",
+  },
+  {
+    title: "高等数学（一）— 江西理工大学",
+    url: "https://www.chinaooc.com.cn/course/6a7b9b1eb44e493c76d1994f",
+    readUrl: "https://www.chinaooc.com.cn/course/6a7b9b1eb44e493c76d1994f",
+    officialUrl: "https://www.chinaooc.com.cn/course/6a7b9b1eb44e493c76d1994f",
+    source: "国家高等教育智慧教育平台（学银在线）· 江西理工大学",
+    publishedAt: null,
+    category: "courses",
+    summaryZh:
+      "江西理工大学《高等数学（一）》：江西高校免费通用高数、按江西大纲 6 阶段拼用，本课覆盖第 1–3 阶段（函数与极限、一元函数微分学、一元函数积分学）；每章配习题课、提高练习和测验；开课中 2026/08/11–2026/12/31，4万+ 人选课，适用年份 2026·往年参考。",
+    points: [
+      "江西高校免费通用高数、按江西大纲 6 阶段拼用：本课覆盖第 1–3 阶段（函数、极限和连续；一元函数微分学及其应用；一元函数积分学及其应用），第 4–6 阶段见同校《高等数学（二）》，适用年份 2026·往年参考。",
+      "从第 1 章“函数与极限”开始：1.1 课程导论 映射与函数；第 2 章导数与微分、第 3 章微分中值定理与导数的应用、第 4 章不定积分、第 5 章定积分、第 6 章定积分的应用。",
+      "每章配习题课、提高练习和单元测验，另有期中、期终复习直播课，属配套练习（非真题）。",
+      "开课中：2026/08/11–2026/12/31，21 周，4万+ 人选课。",
+      "费用口径经课程页原文核实：课程页未写‘免费’二字，也未标价；智慧教育平台（学银在线）为国家高等教育智慧教育平台，平台课程学习免费，证书是否收费未说明。",
+      "课程简介未提“专升本”：这是江西高校通用高数课，不是江西专升本高数课，按江西考试说明对照取舍。",
+    ],
+    mathTopic: true,
+    relevance: "适合按官方 6 阶段顺序学高数的专科在读生，从第 1 阶段开始，能直接从第 1 章 1.1 开始。",
+    startHint: "第 1 章 1.1 课程导论 映射与函数",
+    fee: "智慧教育平台免费课程，学习免费；课程页未写‘免费’二字，也未标价",
+    needsApplication: false,
+    deadline: null,
+    needsLogin: false,
+    blockedReason: null,
+    chineseUrl: null,
+    titleOnly: false,
+    enrichState: "stored",
+    group: "anytime",
+    audienceStage: "专科在读",
+  },
+  {
+    title: "高等数学（二）— 江西理工大学",
+    url: "https://www.chinaooc.com.cn/course/69b48a9b95df98bb27cf3851",
+    readUrl: "https://www.chinaooc.com.cn/course/69b48a9b95df98bb27cf3851",
+    officialUrl: "https://www.chinaooc.com.cn/course/69b48a9b95df98bb27cf3851",
+    source: "国家高等教育智慧教育平台（学银在线）· 江西理工大学",
+    publishedAt: null,
+    category: "courses",
+    summaryZh:
+      "江西理工大学《高等数学（二）》：江西高校免费通用高数、按江西大纲 6 阶段拼用，本课覆盖第 4–6 阶段（常微分方程、多元函数微分学、二重积分）；含超纲章节，学习时跳过第 2、5、6 章及第 4 章三重积分部分；已结课 2026/03/01–2026/09/01，回放未确认，适用年份 2026·往年参考。",
+    points: [
+      "江西高校免费通用高数、按江西大纲 6 阶段拼用：本课覆盖第 4–6 阶段（常微分方程、多元函数微分学及其应用、二重积分及其应用），第 1–3 阶段见同校《高等数学（一）》，适用年份 2026·往年参考。",
+      "从第 1 章“微分方程”开始：1.1 高数（二）导论 微分方程的基本概念 可分离变量微分方程；第 3 章多元函数微分法及其应用、第 4 章重积分中的二重积分部分（4.1–4.3）。",
+      "超纲章节请跳过：第 2 章“向量代数与空间解析几何”、第 5 章“曲线积分与曲面积分”、第 6 章“无穷级数”；第 4 章“重积分”中 4.4–4.6 三重积分部分也超纲，只学 4.1–4.3 二重积分。",
+      "每章配综合练习、综合练习讲评和单元测验，另有期中、期终复习直播课，属配套练习（非真题）。",
+      "已结课（2026/03/01–2026/09/01）；课程页只写“已结课”，未写视频是否仍可观看，回放未确认。",
+      "费用口径经课程页原文核实：课程页未写‘免费’二字，也未标价；智慧教育平台（学银在线）为国家高等教育智慧教育平台，平台课程学习免费，证书是否收费未说明。",
+      "课程简介可读文字中未提“专升本”（“这门课会讲什么？”一节为图片，文字版无法核对）：这是江西高校通用高数课，不是江西专升本高数课，按江西考试说明对照取舍。",
+    ],
+    mathTopic: true,
+    relevance: "适合已学完第 1–3 阶段的专科在读生，接第 4–6 阶段，能直接从第 1 章 1.1 微分方程开始；注意跳过超纲章节。",
+    startHint: "第 1 章 1.1 高数（二）导论 微分方程的基本概念 可分离变量微分方程",
+    fee: "智慧教育平台免费课程，学习免费；课程页未写‘免费’二字，也未标价",
     needsApplication: false,
     deadline: null,
     needsLogin: false,
@@ -7736,7 +7801,7 @@ export const Actions = {
 
   getLearning: defineAction({
     description:
-      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生； since 2026-11-23 the stage signals — middle school(s), 中小学， 初中， 高中生， 中六， JUPAS, DSE, 研究生/硕士研究生 — are matched against title + summary + points + audienceStage together, so an item whose stage is stated only in its body, e.g. an HKU undergraduate item naming JUPAS/中六 in its points, is excluded too), pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships), activity write-ups whose summary dates the event in the past (\"X月X日……举行/举办/召开\" with no replay and no sign-up, e.g. the 东湖大咖公开课 report), 专硕/学硕 master's-stage items (e.g. the 专硕 dorm-policy news), scholarships limited to one local school district's students or to high-school students only (school district / juniors and seniors / high school football / high school athlete / 学区 / 高中生， e.g. the St. Joseph scholarship and the People high-school athlete scholarship story) and expired intakes are all filtered out, so the list may honestly be empty. 自 2026-11-23 起另有两条规则：只有宣传博客、限时试听或无法核实免费范围的内容不进学习栏（课程卡必须直接链接到可免费学习的具体课程、练习或讲座回放；免费注册、仅证书收费的课程保留）；已发放/已颁发类报道不进可报名列表且 needsApplication 纠正为 false，只有官方页面确认报名已开放、报名免费且申请范围包含中国专科在读生时才列入，官方明确滚动报名或常年开放的项目即使没有截止日期也可保留。 HTML entities (&#…; and &…;, incl. double-encoded forms) are decoded in titles, points and summaries at ingest and on every read (2026-11-23), and an unenriched item's summary/relevance line is rebuilt from complete sentences of its own source summary — never cut mid-sentence and never a fabricated translation. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip. Since 2026-11-23 the list is split into two display groups via each item's group field: twenty-five hand-verified free resources that can be started right now (CURATED_LEARNING_ANYTIME — 网络安全/英语公开课， authorised CTF practice, a Cambridge lecture recording, plus CS50/编程、Web 安全实训、高等数学； each with a startHint naming the first lesson or exercise) lead the items array as group=anytime, followed by pool courses/resources (also anytime); pool opportunities with a deadline in the next 30 days and a confirmed official entry are group=upcoming （近期可报名）; a rolling / long-term-open opportunity in the 近期可报名 class is group=upcoming even without a deadline, and after the z-round two-class gate no pool item keeps group=null. The curated 近期可报名 set is empty this round — no official page was verified as explicitly open and free — so that group may honestly show its empty state. 自 2026-11-23 起，池内条目只有含真实可学内容（课程/讲座/回放/练习/实验）才进随时可学；纯政策新闻（征求意见稿、管理条例/办法类通知，如《教材管理条例（征求意见稿）》）由学习栏规则滤掉，永不为 group=anytime。自 2026-11-23 起另有 7 门人工核实的免费中文 AI 课程（CURATED_LEARNING_AI）作为持久精选随随时可学一同返回，每门带 aiTopic=true 供客户端的「AI 学习」话题筛选使用（能学什么/需要什么基础/从哪一课开始都写在卡上；全部免费学习、需免费注册、仅认证证书付费）；池内条目永不带 aiTopic。自 2026-11-23 起，Coursera 博客《Introducing AI Series on Coursera》（背后是 Coursera Plus 付费订阅、无单门免费带中文字幕课程、面向在职人士）由宣传博客规则从学习栏整个移除，不再保留随时可学位置；吴恩达《AI for Everyone》因只有非官方搬运、正版免费旁听与中文字幕未核实而不收录。自 2026-11-24 起另有一条确定性规则：标题含「夜校」、费用未说明、无 startHint、无截止日期且链接不在课程/学习平台域名上的条目，按纯新闻滤掉（如广州日报大洋网的青年夜校生活方式报道——没有任何具体课程、报名入口或免费学习入口）；带费用说明或开始提示的真实夜校课程不受影响。自 2026-11-24 起另有两类守门规则（z-round）：池内条目只有符合随时可学（有明确的免费课程、练习或回放入口；免费注册、仅证书收费保留）或近期可报名（有主办方官方报名入口、确认当前开放、报名免费且专科在读符合条件；官方明确长期/滚动开放的项目可以没有截止日期）才保留，两类都不满足的条目从学习列表彻底移除，不再进入「其他学习机会」；仅 needsApplication=true、未核实费用的招生/奖学金汇总、已颁发获奖名单、论坛邀请、博客文章和天气新闻等均被滤掉。自 2026-11-24 起再收紧（aa-round）：opportunities 类条目只能经「近期可报名」类合格，不能再靠「随时可学」的文本碎片混入后以 group=null 落进「其他学习机会」；随时可学的免费证据须由 免费 直接绑定课程/练习/回放等可学入口（裸「免费开放」和「免费…（隔字）…课程」不再算数），可学信号不再认裸字「课」（停课不算课程）；标题为天气/气象预报预警类且无自身学习入口的条目按纯新闻滤掉；汇总/盘点类标题不算单项官方报名入口，Outlook safelinks 跳转链接不算主办方官方入口，范围证据里的裸「不限」须为学历/专业/学校/年级不限才算。学习缓存键升至 learning:all:v3，旧缓存不再被读到。自 2026-11-24 起同一课程在两个平台的入口去重（`collapseSameCourseEntries`，入库 `loadLearning` 与每次 `getLearning` 读回都执行，`getDailyDigest` 经 `loadLearning` 同样去重）：北理工《网络安全——应用技术与工程实践》曾在学堂在线与 MOOC 各有一条精选，去重只保留带 `aiTopic` 的 MOOC 条目（2026-11-26 起学堂在线入口已从随时可学精选移出）；合并列表 32 条、AI 筛选仍 7 条；去重键为归一化标题（去标点/空白/横线变体）＋学校（标题末尾括号里的学校优先，否则取来源末段的学校，均须含“大学/学院/学校”字样）。自 2026-11-26 起另有「英语」「高等数学」话题筛选：englishTopic 标 7 门：国防科大《大学英语（口语）》（日常英语方向；2026 年考试说明不考听力口语，不标为对齐考试）与集美《英语听力技能与实践》（日常英语），另有 5 门专升本英语课（河南科大《大学英语（四）》、长安《大学英语读写（一）》、新通用大学英语（一）、南京大学《大学英语学术阅读与写作》与《英汉互译方法与技巧》）；mathTopic 标 6 门：江苏农林《高等数学（一）》（高数路线第 1–3 阶段）、可汗学院中文站（覆盖全部 6 阶段）、同济《高等数学（一）》（第 1–2 阶段）、同济《高等数学（二）》（第 3–4 阶段）、《高等数学（下）》（第 5–6 阶段为主，附带第 4 阶段）与南京工大《高等数学（一）》（第 1–4 阶段）；池内条目永不带这两个字段。2026-11-26 Tier 2（用户 22:54 批准）：上述 10 门 MOOC 课按平台免费口径上架（平台课程学习免费，仅认证证书付费；课程页未写‘免费’二字），清华《生活英语听说》因链接未验证暂缓，福州大学《网络空间安全概论》与上交《信息安全数学基础》不加。任何条目都不标「江西专升本真题」。",
+      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生； since 2026-11-23 the stage signals — middle school(s), 中小学， 初中， 高中生， 中六， JUPAS, DSE, 研究生/硕士研究生 — are matched against title + summary + points + audienceStage together, so an item whose stage is stated only in its body, e.g. an HKU undergraduate item naming JUPAS/中六 in its points, is excluded too), pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships), activity write-ups whose summary dates the event in the past (\"X月X日……举行/举办/召开\" with no replay and no sign-up, e.g. the 东湖大咖公开课 report), 专硕/学硕 master's-stage items (e.g. the 专硕 dorm-policy news), scholarships limited to one local school district's students or to high-school students only (school district / juniors and seniors / high school football / high school athlete / 学区 / 高中生， e.g. the St. Joseph scholarship and the People high-school athlete scholarship story) and expired intakes are all filtered out, so the list may honestly be empty. 自 2026-11-23 起另有两条规则：只有宣传博客、限时试听或无法核实免费范围的内容不进学习栏（课程卡必须直接链接到可免费学习的具体课程、练习或讲座回放；免费注册、仅证书收费的课程保留）；已发放/已颁发类报道不进可报名列表且 needsApplication 纠正为 false，只有官方页面确认报名已开放、报名免费且申请范围包含中国专科在读生时才列入，官方明确滚动报名或常年开放的项目即使没有截止日期也可保留。 HTML entities (&#…; and &…;, incl. double-encoded forms) are decoded in titles, points and summaries at ingest and on every read (2026-11-23), and an unenriched item's summary/relevance line is rebuilt from complete sentences of its own source summary — never cut mid-sentence and never a fabricated translation. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip. Since 2026-11-23 the list is split into two display groups via each item's group field: twenty-seven hand-verified free resources that can be started right now (CURATED_LEARNING_ANYTIME — 网络安全/英语公开课， authorised CTF practice, a Cambridge lecture recording, plus CS50/编程、Web 安全实训、高等数学； each with a startHint naming the first lesson or exercise) lead the items array as group=anytime, followed by pool courses/resources (also anytime); pool opportunities with a deadline in the next 30 days and a confirmed official entry are group=upcoming （近期可报名）; a rolling / long-term-open opportunity in the 近期可报名 class is group=upcoming even without a deadline, and after the z-round two-class gate no pool item keeps group=null. The curated 近期可报名 set is empty this round — no official page was verified as explicitly open and free — so that group may honestly show its empty state. 自 2026-11-23 起，池内条目只有含真实可学内容（课程/讲座/回放/练习/实验）才进随时可学；纯政策新闻（征求意见稿、管理条例/办法类通知，如《教材管理条例（征求意见稿）》）由学习栏规则滤掉，永不为 group=anytime。自 2026-11-23 起另有 7 门人工核实的免费中文 AI 课程（CURATED_LEARNING_AI）作为持久精选随随时可学一同返回，每门带 aiTopic=true 供客户端的「AI 学习」话题筛选使用（能学什么/需要什么基础/从哪一课开始都写在卡上；全部免费学习、需免费注册、仅认证证书付费）；池内条目永不带 aiTopic。自 2026-11-23 起，Coursera 博客《Introducing AI Series on Coursera》（背后是 Coursera Plus 付费订阅、无单门免费带中文字幕课程、面向在职人士）由宣传博客规则从学习栏整个移除，不再保留随时可学位置；吴恩达《AI for Everyone》因只有非官方搬运、正版免费旁听与中文字幕未核实而不收录。自 2026-11-24 起另有一条确定性规则：标题含「夜校」、费用未说明、无 startHint、无截止日期且链接不在课程/学习平台域名上的条目，按纯新闻滤掉（如广州日报大洋网的青年夜校生活方式报道——没有任何具体课程、报名入口或免费学习入口）；带费用说明或开始提示的真实夜校课程不受影响。自 2026-11-24 起另有两类守门规则（z-round）：池内条目只有符合随时可学（有明确的免费课程、练习或回放入口；免费注册、仅证书收费保留）或近期可报名（有主办方官方报名入口、确认当前开放、报名免费且专科在读符合条件；官方明确长期/滚动开放的项目可以没有截止日期）才保留，两类都不满足的条目从学习列表彻底移除，不再进入「其他学习机会」；仅 needsApplication=true、未核实费用的招生/奖学金汇总、已颁发获奖名单、论坛邀请、博客文章和天气新闻等均被滤掉。自 2026-11-24 起再收紧（aa-round）：opportunities 类条目只能经「近期可报名」类合格，不能再靠「随时可学」的文本碎片混入后以 group=null 落进「其他学习机会」；随时可学的免费证据须由 免费 直接绑定课程/练习/回放等可学入口（裸「免费开放」和「免费…（隔字）…课程」不再算数），可学信号不再认裸字「课」（停课不算课程）；标题为天气/气象预报预警类且无自身学习入口的条目按纯新闻滤掉；汇总/盘点类标题不算单项官方报名入口，Outlook safelinks 跳转链接不算主办方官方入口，范围证据里的裸「不限」须为学历/专业/学校/年级不限才算。学习缓存键升至 learning:all:v3，旧缓存不再被读到。自 2026-11-24 起同一课程在两个平台的入口去重（`collapseSameCourseEntries`，入库 `loadLearning` 与每次 `getLearning` 读回都执行，`getDailyDigest` 经 `loadLearning` 同样去重）：北理工《网络安全——应用技术与工程实践》曾在学堂在线与 MOOC 各有一条精选，去重只保留带 `aiTopic` 的 MOOC 条目（2026-11-26 起学堂在线入口已从随时可学精选移出）；合并列表 34 条、AI 筛选仍 7 条；去重键为归一化标题（去标点/空白/横线变体）＋学校（标题末尾括号里的学校优先，否则取来源末段的学校，均须含“大学/学院/学校”字样）。自 2026-11-26 起另有「英语」「高等数学」话题筛选：englishTopic 标 7 门：国防科大《大学英语（口语）》（日常英语方向；2026 年考试说明不考听力口语，不标为对齐考试）与集美《英语听力技能与实践》（日常英语），另有 5 门专升本英语课（河南科大《大学英语（四）》、长安《大学英语读写（一）》、新通用大学英语（一）、南京大学《大学英语学术阅读与写作》与《英汉互译方法与技巧》）；mathTopic 标 8 门：江苏农林《高等数学（一）》（高数路线第 1–3 阶段）、可汗学院中文站（覆盖全部 6 阶段）、同济《高等数学（一）》（第 1–2 阶段）、同济《高等数学（二）》（第 3–4 阶段）、《高等数学（下）》（第 5–6 阶段为主，附带第 4 阶段）与南京工大《高等数学（一）》（第 1–4 阶段）、江西理工大学《高等数学（一）》（第 1–3 阶段）与江西理工大学《高等数学（二）》（第 4–6 阶段）；池内条目永不带这两个字段。2026-11-26 Tier 2（用户 22:54 批准）：上述 10 门 MOOC 课按平台免费口径上架（平台课程学习免费，仅认证证书付费；课程页未写‘免费’二字），清华《生活英语听说》因链接未验证暂缓，福州大学《网络空间安全概论》与上交《信息安全数学基础》不加。任何条目都不标「江西专升本真题」。",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),

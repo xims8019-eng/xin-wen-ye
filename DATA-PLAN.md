@@ -441,3 +441,12 @@ Imagery not needed: a text-first broadsheet news page — headlines, rankings an
 - Matcher 测试结论：真实数组验证——合并总数 32、数学 6、英语 7、AI 7；M1 同济与 M4 南京工大都在；逐项对照旧函数，唯一差异是 M4 恢复（北理工《网络安全——应用技术与工程实践》仍只保留带 aiTopic 的 MOOC 条目，去重本身未松动）。
 - 未改动：任何课程标题、fee/points 文案、定时刷新、置顶区、江西栏、2028 四项、健身栏；未加福州大学/上交。服务端与客户端 tsc 已验证干净。
 - Muse 侧无需改动：Muse artifact（slug xin-wen-ye）当前 v74，live getLearning 32 条、数学筛选 6 条，Muse 侧没有等价去重函数，本轮 Muse 不发新版。
+
+## 学习栏「高等数学」筛选第五轮：新增江西理工大学 2 门通用高数课 (2026-11-26 edit)
+- Brief: 用户 2026-11-26 23:25 批准（点了「加江西理工那两门，标清是通用课」）：把江西理工大学《高等数学（一）》＋《高等数学（二）》加进学习栏「高等数学」筛选，卡片写清是江西高校免费通用高数、按江西大纲 6 阶段拼用，绝不标成“江西专升本高数课”。字段由父代理逐字给定（研究员已逐条核实课程页），照抄追加。
+- Added (2, appended to `CURATED_LEARNING_ANYTIME` after the existing 25, both group=anytime、audienceStage=专科在读、category=courses、mathTopic=true、publishedAt=null、deadline=null、needsApplication=false、needsLogin=false、blockedReason=null、chineseUrl=null、titleOnly=false、enrichState=stored；fee 为「智慧教育平台免费课程，学习免费；课程页未写‘免费’二字，也未标价」):
+  - 高等数学（一）— 江西理工大学 https://www.chinaooc.com.cn/course/6a7b9b1eb44e493c76d1994f （国家高等教育智慧教育平台（学银在线）· 江西理工大学；覆盖第 1–3 阶段；开课中 2026/08/11–2026/12/31，4万+ 人选课）
+  - 高等数学（二）— 江西理工大学 https://www.chinaooc.com.cn/course/69b48a9b95df98bb27cf3851 （国家高等教育智慧教育平台（学银在线）· 江西理工大学；覆盖第 4–6 阶段；已结课 2026/03/01–2026/09/01，回放未确认；超纲章节第 2、5、6 章及第 4 章 4.4–4.6 三重积分部分已在 points 标明跳过）
+- 费用口径：课程页未写“免费”二字、也未标价；平台课程学习免费，证书是否收费未说明——未写“仅认证证书付费”，未写“可回放”，未写“附答案”。
+- Counts synced: 数组 25 → 27 项；合并精选 32 → 34 条（随时可学精选 27 + AI 精选 7）；数学筛选 6 → 8 门，英语筛选仍 7 门，AI 仍 7 门；数组头注释（z-round 行 32→34 + 第五轮注释行）与 getLearning 描述（twenty-five→twenty-seven、32→34、mathTopic 标 8 门并补两门江西理工课）同步改。现有 6 门高数课、福州大学/上交、定时刷新、置顶区、江西栏、2028 四项、健身栏、英语/AI 筛选均未碰。
+- 自托管同步：本地工作副本已先对齐远端 head 2e5c0793（actions.ts 与远端逐字节一致，B2 去重键在位）再叠加本轮改动；数组头注释为自托管长行形式（合并列表 32→34 项并补第五轮一句），getLearning 描述串同步改；App.tsx 无改动（Muse v74→v75 客户端无变化，本地与 v75 的差异仅为既有移植层）；Matcher 真实数组验证：合并 34、数学 8、英语 7、AI 7，两门江西理工与 M4 均在列，三门《高等数学（一）》按学校区分保留；服务端与客户端 tsc 干净。
