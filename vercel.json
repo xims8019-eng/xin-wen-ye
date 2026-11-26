@@ -1,1 +1,1 @@
-{"buildCommand":"bun run build","crons":[{"path":"/api/cron","schedule":"2 0 * * *"}],"functions":{"api/action.ts":{"maxDuration":60},"api/cron.ts":{"maxDuration":60}},"outputDirectory":"client/dist"}
+{"buildCommand":"bun run build","crons":[{"path":"/api/cron","schedule":"2 0 * * *"}],"functions":{"api/action.ts":{"maxDuration":300},"api/cron.ts":{"maxDuration":300}},"outputDirectory":"client/dist"}
