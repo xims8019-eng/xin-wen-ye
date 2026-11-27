@@ -2237,7 +2237,7 @@ export function App() {
   });
 
   const lastUpdatedLabel = status.data?.lastUpdatedAt ? formatFullDateTime(status.data.lastUpdatedAt) : null;
-  const scheduleLabel = status.data?.refreshScheduleLabel ?? "每天 08:02 · Asia/Shanghai (UTC+8)";
+  const scheduleLabel = status.data?.refreshScheduleLabel ?? "每天 08:02 / 13:02 / 19:02 · Asia/Shanghai (UTC+8)";
   const statusColumnLabel = (c: "learning" | "jiangxi" | "overseas" | null): string =>
     c === "learning" ? "学习" : c === "jiangxi" ? "江西专升本" : c === "overseas" ? "海外" : "未确认栏目";
   // The scheduled-run line reads ONLY lastCronRun (written by the daily

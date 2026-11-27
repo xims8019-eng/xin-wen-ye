@@ -5087,6 +5087,19 @@ export type WorldScope = "domestic" | "international";
 const WORLD_MAX_DOMESTIC_DAILY = 1;
 const WORLD_MAX_DOMESTIC_ALL = 8;
 
+/**
+ * 固定源位置（2026-11-27 世界栏质量轮）：RNZ/Japan Times 发稿密、
+ * 时间排序会把 TechCrunch 与 CNA 挤出 all 40 条上限（首轮快照里
+ * TechCrunch 0 条）。all 组装时每源至少保 2 条；daily 的科技 slot
+ * 优先取最新 TechCrunch。旧缓存的 all 里 TechCrunch 为 0，slot 保证
+ * 要等下次刷新重建池子才生效，读回路径不补 slot（缓存的 all 已带
+ * slot；读回的过滤只删 domestic/填充条目，不删 TechCrunch/CNA）。
+ */
+const WORLD_SOURCE_SLOTS: Array<{ name: string; min: number; match: (source: string) => boolean }> = [
+  { name: "TechCrunch", min: 2, match: (source) => /techcrunch/i.test(source) },
+  { name: "CNA 亚太", min: 2, match: (source) => /cna|channelnewsasia/i.test(source) },
+];
+
 // 国内/国际确定性分类（2026-11-27）：只看来源属性与标题/摘要关键词，
 // 不用模型判断。优先级：跨境措施（关税/制裁/出口管制是国家间措施，
 // 哪怕主语是中国）> 外国地点且无强国内 framing > 强国内 framing >
@@ -5187,6 +5200,75 @@ export function applyWorldQuota<T extends { scope?: WorldScope; title: string; s
   return out;
 }
 
+/**
+ * 固定源位置补足（2026-11-27）：对 WORLD_SOURCE_SLOTS 里的每个源，
+ * 若 list 中该源少于 min，从时间排序的 pool 里取该源最新且不在 list
+ * 中的条目补足——有几条补几条，无新鲜条目不填空。补完后若超 maxTotal，
+ * 从末尾起删最旧的非 slot 源条目（slot 源条目受保护；删条目只会减少
+ * domestic 计数，不破坏国内配额）。返回的列表按时间重排。
+ */
+export function ensureWorldSourceSlots<T extends { source: string; publishedAt: string | null }>(
+  list: T[],
+  pool: T[],
+  maxTotal: number,
+): T[] {
+  const out = [...list];
+  const byTime = (a: T, b: T) => {
+    const ta = a.publishedAt ? new Date(a.publishedAt).getTime() : 0;
+    const tb = b.publishedAt ? new Date(b.publishedAt).getTime() : 0;
+    return tb - ta;
+  };
+  const sortedPool = [...pool].sort(byTime);
+  for (const slot of WORLD_SOURCE_SLOTS) {
+    const have = out.filter((it) => slot.match(it.source)).length;
+    const need = slot.min - have;
+    if (need <= 0) continue;
+    let added = 0;
+    for (const cand of sortedPool) {
+      if (added >= need) break;
+      if (!slot.match(cand.source)) continue;
+      if (out.includes(cand)) continue;
+      out.push(cand);
+      added++;
+    }
+  }
+  if (out.length > maxTotal) {
+    out.sort(byTime);
+    for (let i = out.length - 1; i >= 0 && out.length > maxTotal; i--) {
+      const it = out[i]!;
+      if (WORLD_SOURCE_SLOTS.some((slot) => slot.match(it.source))) continue;
+      out.splice(i, 1);
+    }
+  }
+  return out.sort(byTime);
+}
+
+/**
+ * Daily 轮询顺序（2026-11-27）：round-robin across topics so one topic
+ * cannot fill the whole homepage list. Topic 为 "科技" 时优先取 pool 里
+ * 最新的 TechCrunch 条目（没有则取该 topic 最新条目）；其余 topic 不变。
+ * 传入的 dailyPool 须已按时间倒序排好。
+ */
+export function buildWorldDailyOrder(dailyPool: WorldItem[]): WorldItem[] {
+  const dailyOrder: WorldItem[] = [];
+  const topics = [...new Set(dailyPool.map((it) => it.topic))];
+  for (;;) {
+    let progressed = false;
+    for (const t of topics) {
+      const remaining = dailyPool.filter((it) => it.topic === t && !dailyOrder.includes(it));
+      if (remaining.length === 0) continue;
+      const candidate =
+        t === "科技"
+          ? (remaining.find((it) => /techcrunch/i.test(it.source)) ?? remaining[0]!)
+          : remaining[0]!;
+      dailyOrder.push(candidate);
+      progressed = true;
+    }
+    if (!progressed) break;
+  }
+  return dailyOrder;
+}
+
 function titleKey(title: string): string {
   return title.replace(/[\s\p{P}]/gu, "").slice(0, 14);
 }
@@ -5218,6 +5300,40 @@ function isLocalFestivalTrafficNotice(it: { title: string; summary: string | nul
   return false;
 }
 
+/**
+ * 购物/解谜填充内容（2026-11-27 世界栏质量轮）：英文版 Google 新闻
+ * BUSINESS feed 会把黑五促销（NYT Wirecutter「Best Black Friday
+ * Deals」）与每日解谜答案（Mashable「Wordle today: The answer and
+ * hints」）带进世界栏池子，这些不是新闻，只占 daily/all 名额。
+ * 确定性正则，只看标题/摘要/来源/URL 合并文本；只拦 daily 与 all，
+ * 每周精选（书籍/历史/语言学习）不受影响。生效三层，与国内门槛同款：
+ * 入库（pushDedup）、读回（loadMyWorld 缓存命中路径、getMyWorld
+ * handler）；缓存 key 不 bump，旧缓存读回时同样被清理。
+ * 注意「under $」的价格促销要求 $ 后至少 3 位数字字符（under $1,000
+ * 算，裸 "under $70" 这类油价式标题不算）；「save」只在与购物节事件
+ * 合取时才算促销词，单条 "save the tree" 类标题不会被拦。
+ */
+const WORLD_SHOPPING_EVENT_RE = /black[- ]friday|cyber[- ]monday|prime day|singles.? day|double ?11/i;
+const WORLD_SHOPPING_PROMO_RE = /\bdeals?\b|shop(ping)?\b|\bdiscounts?\b|\bsave\b|% off|under \$|\bgifts?\b/i;
+const WORLD_SHOPPING_BEST_DEALS_RE = /\bbest deals\b/i;
+const WORLD_SHOPPING_PROMO2_RE = /gift guide|best gifts|for members|% off|under \$\d[\d,]{2,}/i;
+const WORLD_SHOPPING_URL_RE = /\/shopping\//i;
+const WORLD_SHOPPING_RETAILER_RE = /\b(costco|walmart|amazon|target|best buy)\b.{0,40}\b(deal|sale|exclusive|discount|under \$|% off)\b/i;
+const WORLD_PUZZLE_RE = /wordle|crossword|spelling bee/i;
+const WORLD_PUZZLE_HINTS_RE = /\banswer and hints\b|(connections|strands)\b.{0,30}\b(hints?|answers?)\b/i;
+
+export function isWorldShoppingFiller(it: { title: string; summary: string | null; source: string; url: string }): boolean {
+  const text = `${it.title} ${it.summary ?? ""} ${it.source} ${it.url}`;
+  if (WORLD_SHOPPING_EVENT_RE.test(text) && WORLD_SHOPPING_PROMO_RE.test(text)) return true;
+  if (WORLD_SHOPPING_BEST_DEALS_RE.test(text)) return true;
+  if (WORLD_SHOPPING_PROMO2_RE.test(text)) return true;
+  if (WORLD_SHOPPING_URL_RE.test(it.url)) return true;
+  if (WORLD_SHOPPING_RETAILER_RE.test(text)) return true;
+  if (WORLD_PUZZLE_RE.test(text)) return true;
+  if (WORLD_PUZZLE_HINTS_RE.test(text)) return true;
+  return false;
+}
+
 async function loadMyWorld(ctx: Ctx, force: boolean): Promise<{ daily: WorldItem[]; weekly: WorldItem[]; all: WorldItem[]; asOf: string }> {
   if (!force) {
     const cached = await readCache<{ daily: WorldItem[]; weekly: WorldItem[]; all: WorldItem[] }>(ctx, "world:all:v3", WORLD_TTL_MS);
@@ -5227,13 +5343,13 @@ async function loadMyWorld(ctx: Ctx, force: boolean): Promise<{ daily: WorldItem
       // 新源重建池子；旧缓存挡不住新配比。
       const scoped = (list: WorldItem[]) => list.map(withWorldScope);
       const daily = applyWorldQuota(
-        scoped(cached.data.daily).filter((it) => !isWorldDomesticBlocked(it)),
+        scoped(cached.data.daily).filter((it) => !isWorldDomesticBlocked(it) && !isWorldShoppingFiller(it)),
         5,
         WORLD_MAX_DOMESTIC_DAILY,
       );
       const weekly = scoped(cached.data.weekly);
       const all = applyWorldQuota(
-        scoped(cached.data.all).filter((it) => !isWorldDomesticBlocked(it)),
+        scoped(cached.data.all).filter((it) => !isWorldDomesticBlocked(it) && !isWorldShoppingFiller(it)),
         40,
         WORLD_MAX_DOMESTIC_ALL,
       );
@@ -5246,6 +5362,9 @@ async function loadMyWorld(ctx: Ctx, force: boolean): Promise<{ daily: WorldItem
       // Local festival/traffic advisories for an unrelated locality never
       // enter the pool (see isLocalFestivalTrafficNotice).
       if (isLocalFestivalTrafficNotice(it)) continue;
+      // 购物/解谜填充内容不入池（见 isWorldShoppingFiller）；每周精选
+      // （书籍/历史/语言学习）不受影响。
+      if (!weekly && isWorldShoppingFiller(it)) continue;
       const direct = decodeBingClick(it.url);
       if (isBingClick(direct)) continue;
       // No relay link is stored in this column either: category items now
@@ -5351,23 +5470,11 @@ async function loadMyWorld(ctx: Ctx, force: boolean): Promise<{ daily: WorldItem
   // hard domestic quota (at most 1 domestic in 5 — see applyWorldQuota),
   // so a domestic item early in the order never crowds out international
   // items later in it. Domestic may be 0 when no major domestic item
-  // is in the pool.
-  const dailyOrder: WorldItem[] = [];
-  const topics = [...new Set(dailyPool.map((it) => it.topic))];
-  for (;;) {
-    let progressed = false;
-    for (const t of topics) {
-      const candidate = dailyPool.filter((it) => it.topic === t && !dailyOrder.includes(it))[0];
-      if (candidate) {
-        dailyOrder.push(candidate);
-        progressed = true;
-      }
-    }
-    if (!progressed) break;
-  }
-  const daily = applyWorldQuota(dailyOrder, 5, WORLD_MAX_DOMESTIC_DAILY);
+  // is in the pool. The 科技 slot prefers the newest TechCrunch item
+  // (see buildWorldDailyOrder).
+  const daily = applyWorldQuota(buildWorldDailyOrder(dailyPool), 5, WORLD_MAX_DOMESTIC_DAILY);
   const weekly = merged.filter((it) => it.weekly).sort(byTime).slice(0, 9);
-  const all = applyWorldQuota(merged.sort(byTime), 40, WORLD_MAX_DOMESTIC_ALL);
+  const all = ensureWorldSourceSlots(applyWorldQuota(merged.sort(byTime), 40, WORLD_MAX_DOMESTIC_ALL), merged, 40);
   if (all.length === 0) {
     await noteRefreshFailure(ctx, "我关注的世界");
     const stale = await readCacheStale<{ daily: WorldItem[]; weekly: WorldItem[]; all: WorldItem[] }>(ctx, "world:all:v3");
@@ -7767,9 +7874,9 @@ export const Actions = {
         enrichError,
         enrichErrorAt,
         enrichErrorColumn,
-        refreshTimeLabel: "08:02",
+        refreshTimeLabel: "08:02 / 13:02 / 19:02",
         refreshTimezone: "Asia/Shanghai",
-        refreshScheduleLabel: "每天 08:02 · Asia/Shanghai (UTC+8)",
+        refreshScheduleLabel: "每天 08:02 / 13:02 / 19:02 · Asia/Shanghai (UTC+8)",
         columns,
         currentErrors,
         lastError,
@@ -8274,7 +8381,7 @@ export const Actions = {
 
   getMyWorld: defineAction({
     description:
-      "Returns 我关注的世界： daily picks (at most 5, same event merged, across 经济/政治/科技/网络安全/地区冲突）, weekly picks （书籍/历史/语言学习）, and the full topic-browsable list. Local festival/traffic advisories written for one unrelated locality's residents (e.g. 大理州庆交通安全出行提示） are excluded at ingest and on every read; nationwide notices and travel-safety items about 江西 or a study destination （美国/新西兰/新加坡/越南/日本/韩国/爱尔兰/英国） stay. Domestic/international mix (2026-11-27, deterministic, no model): every item carries scope (domestic/international, from source + title/summary keywords); a non-weekly domestic item only enters when it passes the national-major gate (central-body macro policy, national GDP/jobs/trade trend, or a study-abroad/exit item — general domestic news, local livelihood and social items are filtered); daily holds at most 1 domestic item in 5 and the full list at most 8 domestic in 40 (0 domestic allowed), enforced at ingest and again on every read so a stale cache can never serve an out-of-quota list. Each item's 「和我有什么关系」 line is derived deterministically from the item's OWN title/summary (2026-11-22), never from a per-topic template: a disaster/accident report (e.g. the Indonesia candy-factory fire) is labelled a safety event with no visa claim, and the visa/study/travel wording is used only when the item's own text involves visas, study abroad or travel. Titles are HTML-entity-decoded (&#163; → £, &#183; → ·) at ingest and on every read, and a Google News multi-outlet headline list is never stored as a summary — the item is title-only instead of splicing several outlets' reports into one.",
+      "Returns 我关注的世界： daily picks (at most 5, same event merged, across 经济/政治/科技/网络安全/地区冲突）, weekly picks （书籍/历史/语言学习）, and the full topic-browsable list. Local festival/traffic advisories written for one unrelated locality's residents (e.g. 大理州庆交通安全出行提示） are excluded at ingest and on every read; nationwide notices and travel-safety items about 江西 or a study destination （美国/新西兰/新加坡/越南/日本/韩国/爱尔兰/英国） stay. Domestic/international mix (2026-11-27, deterministic, no model): every item carries scope (domestic/international, from source + title/summary keywords); a non-weekly domestic item only enters when it passes the national-major gate (central-body macro policy, national GDP/jobs/trade trend, or a study-abroad/exit item — general domestic news, local livelihood and social items are filtered); daily holds at most 1 domestic item in 5 and the full list at most 8 domestic in 40 (0 domestic allowed), enforced at ingest and again on every read so a stale cache can never serve an out-of-quota list. Each item's 「和我有什么关系」 line is derived deterministically from the item's OWN title/summary (2026-11-22), never from a per-topic template: a disaster/accident report (e.g. the Indonesia candy-factory fire) is labelled a safety event with no visa claim, and the visa/study/travel wording is used only when the item's own text involves visas, study abroad or travel. Titles are HTML-entity-decoded (&#163; → £, &#183; → ·) at ingest and on every read, and a Google News multi-outlet headline list is never stored as a summary — the item is title-only instead of splicing several outlets' reports into one. Shopping-event deals and daily puzzle answers (e.g. Black Friday deals, Wordle answers) are filtered from daily and the full list, but never from weekly picks. TechCrunch and CNA 亚太 each keep at least 2 slots in the full list, and the daily 科技 pick prefers the newest TechCrunch item.",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -8292,11 +8399,14 @@ export const Actions = {
       const keep = (it: WorldItem) => !isLocalFestivalTrafficNotice(it);
       const scoped = (list: WorldItem[]) =>
         list.filter(keep).map(withWorldScope).filter((it) => !isWorldDomesticBlocked(it));
+      // 购物/解谜填充内容在读回时同样清理（daily/all；weekly 不动），
+      // 与国内门槛同款三层生效，旧缓存同样受约束。
+      const scopedNonWeekly = (list: WorldItem[]) => scoped(list).filter((it) => !isWorldShoppingFiller(it));
       return {
         asOf: r.asOf,
-        daily: applyWorldQuota(scoped(r.daily), 5, WORLD_MAX_DOMESTIC_DAILY).map(normalizeWorld),
+        daily: applyWorldQuota(scopedNonWeekly(r.daily), 5, WORLD_MAX_DOMESTIC_DAILY).map(normalizeWorld),
         weekly: scoped(r.weekly).map(normalizeWorld),
-        all: applyWorldQuota(scoped(r.all), 40, WORLD_MAX_DOMESTIC_ALL).map(normalizeWorld),
+        all: applyWorldQuota(scopedNonWeekly(r.all), 40, WORLD_MAX_DOMESTIC_ALL).map(normalizeWorld),
       };
     },
   }),
