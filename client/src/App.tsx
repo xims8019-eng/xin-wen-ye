@@ -590,14 +590,16 @@ function DeadlineAlerts({ deadlines }: { deadlines: LearningItem[] }) {
   );
 }
 
-type LearningTopic = "all" | "ai" | "english" | "math";
+type LearningTopic = "all" | "ai" | "english" | "math" | "politics" | "it";
 
-type LearningItemLike = { aiTopic?: boolean; englishTopic?: boolean; mathTopic?: boolean };
+type LearningItemLike = { aiTopic?: boolean; englishTopic?: boolean; mathTopic?: boolean; politicsTopic?: boolean; itTopic?: boolean };
 
 function matchesTopic(item: LearningItemLike, topic: LearningTopic): boolean {
   if (topic === "all") return true;
   if (topic === "ai") return item.aiTopic === true;
   if (topic === "english") return item.englishTopic === true;
+  if (topic === "politics") return item.politicsTopic === true;
+  if (topic === "it") return item.itTopic === true;
   return item.mathTopic === true;
 }
 
@@ -613,6 +615,8 @@ function LearningTopicFilter({
     { id: "ai", label: "AI 学习" },
     { id: "english", label: "英语" },
     { id: "math", label: "高等数学" },
+    { id: "politics", label: "政治" },
+    { id: "it", label: "信息技术" },
   ];
   return (
     <div className="mt-4 flex flex-wrap gap-2" role="tablist" aria-label="学习话题筛选">
@@ -671,6 +675,26 @@ function MathTopicNote() {
   );
 }
 
+function PoliticsTopicNote() {
+  return (
+    <div className="mt-3 rounded-[var(--radius)] bg-[var(--space-surface-alt)] p-3 text-sm leading-relaxed text-[var(--dim)]" role="note" aria-label="政治筛选说明">
+      <p>
+        政治按江西 2026 年考试说明（往年参考，2028 版尚未发布）分 <span className="font-medium text-[var(--text)]">4 个部分</span>：思想道德与法治、毛泽东思想和中国特色社会主义理论体系概论、习近平新时代中国特色社会主义思想概论、二十大/四中全会与时事政治。3 门课各管一块：首都经济贸易大学《思想道德与法治》覆盖第 1 部分全部，桂林电子科技大学《毛泽东思想和中国特色社会主义理论体系概论》覆盖第 2 部分全部（另含习概早期章节），南京大学《习近平新时代中国特色社会主义思想概论》覆盖第 3 部分全部、且是唯一明确覆盖第 4 部分的课；时事政治没有合适的免费 MOOC，未硬凑。开课状态与回放未验证的项已在每张卡片上注明。
+      </p>
+    </div>
+  );
+}
+
+function ItTopicNote() {
+  return (
+    <div className="mt-3 rounded-[var(--radius)] bg-[var(--space-surface-alt)] p-3 text-sm leading-relaxed text-[var(--dim)]" role="note" aria-label="信息技术筛选说明">
+      <p>
+        信息技术按江西 2026 年考试说明（往年参考，2028 版尚未发布）共 <span className="font-medium text-[var(--text)]">7 个要点</span>。商丘职业技术学院《计算机应用基础》覆盖要点一、二、要点三（几乎全）、要点四部分；东北石油大学《大学计算机基础》覆盖要点一、二、四、五、七，要点三部分覆盖，<span className="font-medium text-[var(--text)]">不覆盖要点六信息安全</span>，另有数据库、数据结构、Python 超纲内容。两门教材版本都较旧（Windows 10 + Office 2016 / Windows 7），要点六需另找资料。
+      </p>
+    </div>
+  );
+}
+
 function LearningSection({ onGoLearning }: { onGoLearning: () => void }) {
   const queryClient = useQueryClient();
   const learning = useQuery({ queryKey: ["learning"], queryFn: () => api.getLearning({ force: false }) });
@@ -717,6 +741,8 @@ function LearningSection({ onGoLearning }: { onGoLearning: () => void }) {
       {topic === "ai" ? <AiLearningNote /> : null}
       {topic === "english" ? <EnglishTopicNote /> : null}
       {topic === "math" ? <MathTopicNote /> : null}
+      {topic === "politics" ? <PoliticsTopicNote /> : null}
+      {topic === "it" ? <ItTopicNote /> : null}
 
       {topic === "all" ? (
         <div className="mt-4">
@@ -818,6 +844,8 @@ function LearningView() {
       {topic === "ai" ? <AiLearningNote /> : null}
       {topic === "english" ? <EnglishTopicNote /> : null}
       {topic === "math" ? <MathTopicNote /> : null}
+      {topic === "politics" ? <PoliticsTopicNote /> : null}
+      {topic === "it" ? <ItTopicNote /> : null}
 
       {topic === "all" ? (
         <div className="mt-4">

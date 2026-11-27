@@ -1457,6 +1457,10 @@ interface LearningItem {
   group?: "anytime" | "upcoming" | null;
   /** Hand-verified AI-learning curated courses only: member of the 「AI 学习」 topic filter. */
   aiTopic?: boolean;
+  /** Hand-verified 政治 curated courses only: member of the 「政治」 topic filter (2026-11-27). Pool items never carry it. */
+  politicsTopic?: boolean;
+  /** Hand-verified 信息技术 curated courses only: member of the 「信息技术」 topic filter (2026-11-27). Pool items never carry it. */
+  itTopic?: boolean;
 }
 
 const LEARNING_TTL_MS = 45 * 60 * 1000;
@@ -5222,6 +5226,10 @@ const learningItemSchema = z.object({
   englishTopic: z.boolean().optional(),
   /** True only for hand-verified 高等数学 curated courses — drives the 「高等数学」 topic filter (2026-11-26). Pool items never carry it. */
   mathTopic: z.boolean().optional(),
+  /** True only for hand-verified 政治 curated courses — drives the 「政治」 topic filter (2026-11-27). Pool items never carry it. */
+  politicsTopic: z.boolean().optional(),
+  /** True only for hand-verified 信息技术 curated courses — drives the 「信息技术」 topic filter (2026-11-27). Pool items never carry it. */
+  itTopic: z.boolean().optional(),
 });
 
 const jiangxiItemSchema = z.object({
@@ -5420,66 +5428,66 @@ const JIANGXI_ARCHIVE_ITEMS: JiangxiArchiveItem[] = [
 // practice and a university lecture recording. Every URL was opened and
 // checked by the researcher; each carries a startHint naming the first
 // lesson or exercise. publishedAt is null: these are standing resources,
-// not news. 2026-11-26 扩充：新增 6 项已核实免费资源（哈佛 CS50x、freeCodeCamp、TryHackMe 免费房间、PortSwigger Web 安全学院、MIT OCW 6.858 进阶、江苏农林高等数学（一）），本数组共 12 项；同日第二轮扩充又新增 2 项已核实免费资源（哈佛 CS50's Introduction to Cybersecurity、思科 Introduction to Cybersecurity），本数组共 15 项。福州大学《网络空间安全概论》与上交《信息安全数学基础》未通过 matcher（条目文本无免费证据），不加；北理工 smartedu 入口已从本数组移出（与 AI 精选的 MOOC 入口为同一门课，去重后只留一处），合并列表 34 项、AI 筛选仍 7 项。同日第三轮扩充（英语/高数筛选）：新增可汗学院中文站 1 项（mathTopic，覆盖高数全部 6 阶段）；国防科大《大学英语（口语）》补 englishTopic（日常英语方向），江苏农林《高等数学（一）》补 mathTopic（高数路线第 1–3 阶段）。同日第四轮扩充（英语/高数 Tier 2，用户 22:54 批准「加上，标清平台免费」）：再新增 10 项 MOOC 课（A1–A5 专升本英语、B2 日常英语听力、M1–M4 高数），本数组共 25 项；费用口径统一为「平台课程学习免费，仅认证证书付费」，每条 points 末尾照抄完整批准句（课程页未写‘免费’二字）。清华《生活英语听说》因链接未验证暂缓，不加。同日第五轮扩充（江西理工高数，用户 23:25 批准「加江西理工那两门，标清是通用课」）：再新增 2 项智慧教育平台/学银在线课程（江西理工大学《高等数学（一）》《高等数学（二）》，mathTopic，第 1–3 / 第 4–6 阶段），本数组共 27 项；费用口径按课程页原文核实：课程页未写‘免费’二字、也未标价，平台课程学习免费，证书是否收费未说明；（二）已结课、回放未确认；两门均为江西高校通用高数课，绝不标成“江西专升本高数课”。 「近期可报名」 has NO curated entries this round — the check
+// not news. 「近期可报名」 has NO curated entries this round — the check
 // found no official page explicitly open for free registration, so that
 // group honestly stays empty (pool items can still land there via the
 // deadlines rule in getLearning).
+// z-round dedup (2026-11-24): 北京理工大学《网络安全-应用技术与工程实践》
+// used to appear TWICE in the merged list — here via its 学堂在线/
+// smartedu entry and again in CURATED_LEARNING_AI via its 中国大学MOOC
+// entry. Field-by-field comparison confirms one and the same course
+// (same title modulo punctuation, same university, same syllabus), so
+// the smartedu entry was removed from this list and its verified facts
+// （另一入口、开课中 2026/07/23–2027/01/12、零基础适用） merged into the
+// surviving MOOC entry in CURATED_LEARNING_AI, which keeps group=anytime
+// AND aiTopic=true — the merged list shows the course once (27 unique
+// curated courses), while it still appears in both the 随时可学 view
+// and the 「AI 学习」 filter (still 7 courses there).
+// 2026-11-26 扩充：本数组在原 6 项之后新增 6 项已核实免费资源
+// （CS50x、freeCodeCamp、TryHackMe Pre Security、PortSwigger Web
+// Security Academy、MIT OCW 6.858、《高等数学（一）》），本数组共 12 项。
+// 2026-11-26 第二轮扩充：再新增 2 项已核实免费资源（哈佛 CS50
+// 网络安全入门、思科 Introduction to Cybersecurity），本数组共 14 项。
+// 2026-11-26 第三轮扩充（英语/高数筛选）：新增可汗学院中文站 1 项
+// （mathTopic，覆盖高数全部 6 阶段），本数组共 15 项；国防科大
+// 《大学英语（口语）》补 englishTopic（日常英语方向），江苏农林
+// 《高等数学（一）》补 mathTopic（高数路线第 1–3 阶段）。
+// 福州大学《网络空间安全概论》与上交《信息安全数学基础》未通过
+// matcher，本轮不加。
+// 2026-11-26 第四轮扩充（英语/高数 Tier 2，用户 22:54 批准「加上，
+// 标清平台免费」）：再新增 10 项 MOOC 课（A1–A5 专升本英语、B2 日常
+// 英语听力、M1–M4 高数），本数组共 25 项；费用口径统一为「平台课程
+// 学习免费，仅认证证书付费」，每条 points 末尾照抄完整批准句（课程
+// 页未写‘免费’二字）。清华《生活英语听说》因链接未验证暂缓，不加。
+// 2026-11-26 第五轮扩充（江西理工高数，用户 23:25 批准「加江西理工
+// 那两门，标清是通用课」）：再新增 2 项智慧教育平台/学银在线课程
+// （江西理工大学《高等数学（一）》《高等数学（二）》，mathTopic，
+// 第 1–3 / 第 4–6 阶段），本数组共 27 项；费用口径按课程页原文核实：
+// 课程页未写‘免费’二字、也未标价，平台课程学习免费，证书是否收费
+// 未说明；（二）已结课、回放未确认；两门均为江西高校通用高数课，
+// 绝不标成“江西专升本高数课”。
+// 2026-11-27 第六轮（政治/信息技术筛选，学习栏按考试科目重组）：删
+// 掉 12 门网安/编程实战课（湖南铁道《网络安全入门与实战》、电子科大
+// 《计算机系统与网络安全技术》、CyLab Security Academy、OverTheWire
+// Bandit、剑桥《Security》录像、CS50x、freeCodeCamp、TryHackMe Pre
+// Security、PortSwigger Web Security Academy、MIT OCW 6.858、CS50 网络
+// 安全入门、思科 Introduction to Cybersecurity），本数组 27→15 项；
+// 再新增 5 门已核实课程（P1–P3 政治、I1–I2 信息技术，politicsTopic /
+// itTopic），本数组共 20 项；合并精选 34→27 条（随时可学精选 20 +
+// AI 精选 7）。广西大学《大学计算机》不加（大纲近半 Python 超纲，
+// 要点二、五、六均无专门章节），只作备选。免费证据铁律：6 门候选课
+// 的课程页正文均未出现「免费」二字、均未标价，卡片按平台如实标注
+// （icourse163：平台课程学习免费，仅认证证书付费，points 末尾加课
+// 程页未写‘免费’二字；智慧教育平台：智慧教育平台免费课程，学习免
+// 费，课程页未写‘免费’二字，也未标价，points 注明证书是否收费未说
+// 明）；未验证的开课状态/回放一律写「未验证」「回放未确认」，不写
+// 成已验证。时事政治、信息安全专项、二十大/四中全会独立课无合适免
+// 费 MOOC，不硬凑。
 // ---------------------------------------------------------------------------
 
 type CuratedLearningItem = z.infer<typeof learningItemSchema>;
 
-export const CURATED_LEARNING_ANYTIME: CuratedLearningItem[] = [
-  {
-    title: "网络安全入门与实战（湖南铁道职业技术学院）",
-    url: "https://www.icourse163.org/course/HNRPC-1466016178",
-    readUrl: "https://www.icourse163.org/course/HNRPC-1466016178",
-    officialUrl: "https://www.icourse163.org/course/HNRPC-1466016178",
-    source: "中国大学MOOC / 湖南铁道职业技术学院",
-    publishedAt: null,
-    category: "courses",
-    summaryZh:
-      "最贴合专科的网络安全课，湖南铁道职业技术学院开设：14 个项目、33 个任务、74 个子任务，分基础、进阶、管理、实战四层；常见问题明写没有基础也能学会。",
-    points: [
-      "学习视频免费，需免费注册账号选课。",
-      "14 个项目、33 个任务、74 个子任务，分基础、进阶、管理、实战四层；学校课程页显示进行至第 2 周。",
-    ],
-    relevance: "适合没有基础的专科在读生，从项目实操入门网络安全，能直接选课开始学。",
-    startHint: "从模块 1“遵章办事，有的放矢——课程定位与基础”之 1.1《课程定位》开始",
-    fee: "免费",
-    needsApplication: false,
-    deadline: null,
-    needsLogin: false,
-    blockedReason: null,
-    chineseUrl: null,
-    titleOnly: false,
-    enrichState: "stored",
-    group: "anytime",
-    audienceStage: "专科在读",
-  },
-  {
-    title: "计算机系统与网络安全技术（电子科技大学）",
-    url: "https://www.icourse163.org/course/UESTC-235006?tid=272013",
-    readUrl: "https://www.icourse163.org/course/UESTC-235006?tid=272013",
-    officialUrl: "https://www.icourse163.org/course/UESTC-235006?tid=272013",
-    source: "中国大学MOOC / 电子科技大学",
-    publishedAt: null,
-    category: "courses",
-    summaryZh:
-      "理论进阶的网络安全课，电子科技大学周世杰教授开设；国家高等教育智慧教育平台镜像页显示开课中，2026/08/30–2026/12/27。",
-    points: ["学习视频免费，需免费注册账号选课。", "开课中：2026/08/30–2026/12/27。"],
-    relevance: "适合学完基础课后进阶理论的专科在读生，能直接选课开始学计算机系统与网络安全技术。",
-    startHint: "从第一章《信息安全概述》之“网络安全的定义”开始",
-    fee: "免费",
-    needsApplication: false,
-    deadline: null,
-    needsLogin: false,
-    blockedReason: null,
-    chineseUrl: null,
-    titleOnly: false,
-    enrichState: "stored",
-    group: "anytime",
-    audienceStage: "专科在读",
-  },
+const CURATED_LEARNING_ANYTIME: CuratedLearningItem[] = [
   {
     title: "大学英语（口语）（国防科技大学）",
     url: "https://higher.smartedu.cn/course/6aeb9d2eb44e493c76486902",
@@ -5510,228 +5518,6 @@ export const CURATED_LEARNING_ANYTIME: CuratedLearningItem[] = [
     audienceStage: "专科在读",
   },
   {
-    title: "CyLab Security Academy（原 picoCTF，美国卡内基梅隆大学）",
-    url: "https://cylabacademy.org/",
-    readUrl: "https://cylabacademy.org/",
-    officialUrl: "https://cylabacademy.org/",
-    source: "美国卡内基梅隆大学 CyLab",
-    publishedAt: null,
-    category: "resources",
-    summaryZh:
-      "免费的 CTF 练习平台，美国卡内基梅隆大学 CyLab 开设：500+ 挑战，General Skills 等 8 个方向；页面明写 Always free，每道题都是为被攻破而设计的，练习本身合法。",
-    points: [
-      "免费，需免费注册账号（邮箱验证）才能做题、记进度并使用网页版 Linux shell。",
-      "授权范围：只在平台指定的靶场内做题；入门指南 https://primer.cylabacademy.org/ 。",
-      "原站 https://picoctf.org/ 已迁移至此。",
-    ],
-    relevance: "适合想练 CTF 的专科在读生，在合法授权的平台靶场内做题，能直接注册开始练。",
-    startHint: "先读入门指南 Primer 的 2.3《Get a Shell》，完成 2.5.3《Shell Nav Exercise 1》，再进平台 General Skills 分类做入门题",
-    fee: "免费",
-    needsApplication: false,
-    deadline: null,
-    needsLogin: false,
-    blockedReason: null,
-    chineseUrl: null,
-    titleOnly: false,
-    enrichState: "stored",
-    group: "anytime",
-    audienceStage: "专科在读",
-  },
-  {
-    title: "OverTheWire：Bandit（面向纯新手的网络安全靶场）",
-    url: "https://overthewire.org/wargames/bandit/",
-    readUrl: "https://overthewire.org/wargames/bandit/",
-    officialUrl: "https://overthewire.org/wargames/bandit/",
-    source: "OverTheWire（志愿者社区）",
-    publishedAt: null,
-    category: "resources",
-    summaryZh:
-      "面向纯新手的免费网络安全靶场：无账号、无报名，用 SSH 直接连靶场做题；规则页明写平台免费向玩家提供这些资源。",
-    points: [
-      "免费，无需注册；用 SSH 直连靶场 bandit.labs.overthewire.org（端口 2220）。",
-      "授权范围：练习只在平台指定的 Bandit 服务器上做，不要把学到的手法用于其他未授权系统；规则页 https://overthewire.org/rules/ 。",
-    ],
-    relevance: "适合零基础想练 Linux 与网络安全基本功的专科在读生，无需注册，能直接连靶场开始。",
-    startHint: "从 Level 0 开始：用用户名和密码均为 bandit0 登录，读 home 目录里的 readme 文件，拿到进入 Level 1 的密码",
-    fee: "免费",
-    needsApplication: false,
-    deadline: null,
-    needsLogin: false,
-    blockedReason: null,
-    chineseUrl: null,
-    titleOnly: false,
-    enrichState: "stored",
-    group: "anytime",
-    audienceStage: "专科在读",
-  },
-  {
-    title: "剑桥大学计算机系《Security》课程录像（2020–21）",
-    url: "https://www.cl.cam.ac.uk/teaching/2021/Security/video/",
-    readUrl: "https://www.cl.cam.ac.uk/teaching/2021/Security/video/",
-    officialUrl: "https://www.cl.cam.ac.uk/teaching/2021/Security/video/",
-    source: "英国剑桥大学计算机科学与技术系",
-    publishedAt: null,
-    category: "courses",
-    summaryZh:
-      "剑桥大学计算机系《Security》课程录像（2020–21 学年），直接点 mp4 链接即可看或下载，无需注册；全英文、偏理论进阶。",
-    points: [
-      "免费，无需注册，直接点 mp4 链接即可看或下载。",
-      "全英文、偏理论进阶，适合在基础课之后看；不是中文讲座。",
-    ],
-    relevance: "适合学完基础课后想进阶理论的专科在读生，能直接点开录像看。",
-    startHint: "从“1 Introduction”（约 23 分钟）开始，接着是“2 Security targets”",
-    fee: "免费",
-    needsApplication: false,
-    deadline: null,
-    needsLogin: false,
-    blockedReason: null,
-    chineseUrl: null,
-    titleOnly: false,
-    enrichState: "stored",
-    group: "anytime",
-    audienceStage: "专科在读",
-  },
-  {
-    title: "CS50x：计算机科学导论（哈佛大学）",
-    url: "https://cs50.harvard.edu/x/",
-    readUrl: "https://cs50.harvard.edu/x/",
-    officialUrl: "https://cs50.harvard.edu/x/",
-    source: "哈佛大学 CS50 / edX",
-    publishedAt: null,
-    category: "courses",
-    summaryZh:
-      "哈佛大学零基础编程入门课，11 周自定进度：C、Python、SQL、网页开发一条线，含安全、密码学、取证主题；哈佛官网写明可经 OpenCourseWare 免费学，仅验证证书收费。",
-    points: [
-      "免费学习：哈佛官网写明可经 OpenCourseWare 免费学；edX 旁听免费，仅验证证书 219 美元。",
-      "零基础可学，无先修要求；自定进度，11 周，每周 10–20 小时。",
-      "全英文，无中文字幕（讲座另有葡语/西语配音）。",
-    ],
-    relevance: "适合零基础补编程基础的信息安全专业学生，能直接从第 0 周开始学；C 语言与 Python 都是后续安全课的地基。",
-    startHint: "从 Lecture 0 – Scratch（第 0 周）开始",
-    fee: "免费（需免费注册；验证证书付费）",
-    needsApplication: false,
-    deadline: null,
-    needsLogin: false,
-    blockedReason: null,
-    chineseUrl: null,
-    titleOnly: false,
-    enrichState: "stored",
-    group: "anytime",
-    audienceStage: "专科在读",
-  },
-  {
-    title: "freeCodeCamp 免费编程课程",
-    url: "https://www.freecodecamp.org/learn",
-    readUrl: "https://www.freecodecamp.org/learn",
-    officialUrl: "https://www.freecodecamp.org/learn",
-    source: "freeCodeCamp.org（美国非营利组织）",
-    publishedAt: null,
-    category: "courses",
-    summaryZh:
-      "免费自定进度的编程课平台：全栈网页开发与机器学习课程完全免费，同一账号还能练 A2/B1 开发者英语；官网写明课程完全免费、部分含免费认证。",
-    points: [
-      "免费：官网写明课程完全免费，部分含免费认证；登录保存进度也是免费的。",
-      "自定进度，从推荐课程第一课开始；完成 5 个项目并通过考试可获免费认证。",
-      "全英文，无中文字幕；另有 A2/B1 开发者英语认证可同步练英语。",
-    ],
-    relevance: "适合想练编程又想练英语的专科在读生，一个账号同时练全栈开发与开发者英语，读写正好补口语之外的短板。",
-    startHint: "从推荐课程第一项 Responsive Web Design 的第一课开始；想练英语可同步看 A2 English for Developers",
-    fee: "免费",
-    needsApplication: false,
-    deadline: null,
-    needsLogin: false,
-    blockedReason: null,
-    chineseUrl: null,
-    titleOnly: false,
-    enrichState: "stored",
-    group: "anytime",
-    audienceStage: "专科在读",
-  },
-  {
-    title: "TryHackMe：Pre Security 学习路径（免费房间）",
-    url: "https://tryhackme.com/path/outline/presecurity",
-    readUrl: "https://tryhackme.com/path/outline/presecurity",
-    officialUrl: "https://tryhackme.com/path/outline/presecurity",
-    source: "TryHackMe（英国网络安全实训平台）",
-    publishedAt: null,
-    category: "resources",
-    summaryZh:
-      "信息安全实训平台的免费入门路径：Linux、网络、Web 安全、密码学等数百间免费房间，浏览器内 AttackBox 每天免费 1 小时；官网写明免费账号可进数百间免费房间。",
-    points: [
-      "免费：免费账号可进数百间免费房间，浏览器内 AttackBox 每天 1 小时；无需银行卡。",
-      "零基础可学，路径从 Introduction to Cyber Security 开始。",
-      "注意：路径中途有付费房间，完成路径的证书需付费订阅；只用免费部分即可。",
-    ],
-    relevance: "适合想动手练信息安全的专科在读生，不用自己搭环境，在浏览器里就能练 Linux、网络与 Web 安全。",
-    startHint: "从 Pre Security 路径第 1 节 Introduction to Cyber Security 的第一间房 Learning Cyber Security 开始",
-    fee: "免费（免费房间；部分房间与证书付费）",
-    needsApplication: false,
-    deadline: null,
-    needsLogin: false,
-    blockedReason: null,
-    chineseUrl: null,
-    titleOnly: false,
-    enrichState: "stored",
-    group: "anytime",
-    audienceStage: "专科在读",
-  },
-  {
-    title: "PortSwigger Web Security Academy（Web 安全学院）",
-    url: "https://portswigger.net/web-security",
-    readUrl: "https://portswigger.net/web-security",
-    officialUrl: "https://portswigger.net/web-security",
-    source: "PortSwigger（Burp Suite 开发商）",
-    publishedAt: null,
-    category: "resources",
-    summaryZh:
-      "免费的 Web 应用安全实训中心：31 个主题、数百个交互实验全部免费，官网写明 100% 免费；SQL 注入、XSS、SSRF 直接对应 OWASP Top 10。",
-    points: [
-      "免费：官网写明学院 100% 免费，全部课程与实验免费，无时间限制。",
-      "从服务端主题开始，首选 SQL 注入主题，Apprentice 级为初学者设计。",
-      "全英文，无中文字幕；部分实验可用免费的 Burp Suite Community Edition。",
-    ],
-    relevance: "适合想练 Web 安全的专科在读生，全部实验免费，是信息安全专业最对口的动手练场。",
-    startHint: "从 Server-side topics（服务端主题）的 SQL 注入主题开始，第一实验是 Apprentice 级 SQL 注入取隐藏数据",
-    fee: "免费（需免费注册才保存进度；可选 BSCP 认证考试收费）",
-    needsApplication: false,
-    deadline: null,
-    needsLogin: false,
-    blockedReason: null,
-    chineseUrl: null,
-    titleOnly: false,
-    enrichState: "stored",
-    group: "anytime",
-    audienceStage: "专科在读",
-  },
-  {
-    title: "MIT OCW 6.858 计算机系统安全（进阶）",
-    url: "https://ocw.mit.edu/courses/6-858-computer-systems-security-fall-2014/",
-    readUrl: "https://ocw.mit.edu/courses/6-858-computer-systems-security-fall-2014/",
-    officialUrl: "https://ocw.mit.edu/courses/6-858-computer-systems-security-fall-2014/",
-    source: "麻省理工学院 MIT OpenCourseWare",
-    publishedAt: null,
-    category: "courses",
-    summaryZh:
-      "MIT 计算机系统安全课（2014 年归档）：操作系统安全、能力、信息流控制、语言安全、网络协议与 Web 应用安全；讲义、录像、实验、试卷全部免费下载，无登录与付费墙。",
-    points: [
-      "免费：OCW 课程全部免费共享，无登录、无付费墙，Creative Commons 许可。",
-      "进阶课：先修课为 MIT 6.033，面向高年级与硕士；实验涉及 x86 汇编、C、Python、JavaScript。",
-      "2014 年归档课，部分技术已旧；无证书、无答疑；实验环境需自己搭建。",
-    ],
-    relevance: "适合学完基础课后想进阶理论的专科在读生，先看前几讲（威胁模型、控制劫持、缓冲区溢出、权限分离），不要一开始就做全套实验。",
-    startHint: "从 Lecture 1: Introduction, Threat Models 开始，先看 Lecture 1–4",
-    fee: "免费",
-    needsApplication: false,
-    deadline: null,
-    needsLogin: false,
-    blockedReason: null,
-    chineseUrl: null,
-    titleOnly: false,
-    enrichState: "stored",
-    group: "anytime",
-    audienceStage: "专科在读",
-  },
-  {
     title: "高等数学（一）— 江苏农林职业技术学院",
     url: "https://www.icourse163.org/course/JASFC-1001755293?from=searchPage&outVendor=zw_mooc_pcssjg_",
     readUrl: "https://www.icourse163.org/course/JASFC-1001755293?from=searchPage&outVendor=zw_mooc_pcssjg_",
@@ -5750,62 +5536,6 @@ export const CURATED_LEARNING_ANYTIME: CuratedLearningItem[] = [
     mathTopic: true,
     startHint: "从第 1 周“函数、极限与连续（一）”开始",
     fee: "免费（需免费注册；认证证书付费）",
-    needsApplication: false,
-    deadline: null,
-    needsLogin: false,
-    blockedReason: null,
-    chineseUrl: null,
-    titleOnly: false,
-    enrichState: "stored",
-    group: "anytime",
-    audienceStage: "专科在读",
-  },
-  {
-    title: "CS50's Introduction to Cybersecurity（哈佛大学）",
-    url: "https://cs50.harvard.edu/cybersecurity/#how-to-take-this-course",
-    readUrl: "https://cs50.harvard.edu/cybersecurity/#how-to-take-this-course",
-    officialUrl: "https://cs50.harvard.edu/cybersecurity/#how-to-take-this-course",
-    source: "哈佛大学 CS50",
-    publishedAt: null,
-    category: "courses",
-    summaryZh:
-      "哈佛大学网络安全入门课程，5 周，无先修要求；哈佛官网写明非哈佛学生也可经 OpenCourseWare 免费学这门课，交作业需免费 edX 账号，verified 证书付费。",
-    points: [
-      "免费学习：哈佛官网写明可经 OpenCourseWare 免费学；交作业需免费 edX 账号，仅 verified 证书付费。",
-      "5 周课程，无先修要求；自定进度。",
-      "全英文，无中文字幕。",
-    ],
-    relevance: "适合零基础想系统学网络安全的专科在读生，哈佛 CS50 的课可直接从第 1 周开始；英文授课，顺带练专业英语。",
-    startHint: "从第 1 周开始",
-    fee: "免费（需免费注册 edX 账号；verified 证书付费）",
-    needsApplication: false,
-    deadline: null,
-    needsLogin: false,
-    blockedReason: null,
-    chineseUrl: null,
-    titleOnly: false,
-    enrichState: "stored",
-    group: "anytime",
-    audienceStage: "专科在读",
-  },
-  {
-    title: "Introduction to Cybersecurity（思科 Networking Academy）",
-    url: "https://www.cisco.com/site/us/en/learn/training-certifications/training/netacad/index.html",
-    readUrl: "https://www.cisco.com/site/us/en/learn/training-certifications/training/netacad/index.html",
-    officialUrl: "https://www.cisco.com/site/us/en/learn/training-certifications/training/netacad/index.html",
-    source: "思科 Networking Academy",
-    publishedAt: null,
-    category: "courses",
-    summaryZh:
-      "思科网络安全入门课，初级，约 6 小时自定进度；思科官网写明免费的自定进度在线课程，需先免费注册 NetAcad 账号再选课，完成后有 Credly 数字徽章。",
-    points: [
-      "免费：思科官网写明 It's free，免费自定进度在线课程；需先免费注册 NetAcad 账号再选课。",
-      "初级，约 6 小时，自定进度；完成后有 Credly 数字徽章。",
-      "全英文，无中文字幕。",
-    ],
-    relevance: "适合零基础想快速入门网络安全的专科在读生，6 小时能走完一遍，还能拿一个数字徽章；英文授课。",
-    startHint: "先免费注册 NetAcad 账号，再从第一模块开始",
-    fee: "免费（需免费注册 NetAcad 账号）",
     needsApplication: false,
     deadline: null,
     needsLogin: false,
@@ -6216,6 +5946,167 @@ export const CURATED_LEARNING_ANYTIME: CuratedLearningItem[] = [
     group: "anytime",
     audienceStage: "专科在读",
   },
+  {
+    title: "思想道德与法治 — 首都经济贸易大学",
+    url: "https://higher.smartedu.cn/course/6a823489b44e493c76f69162",
+    readUrl: "https://higher.smartedu.cn/course/6a823489b44e493c76f69162",
+    officialUrl: "https://higher.smartedu.cn/course/6a823489b44e493c76f69162",
+    source: "国家高等教育智慧教育平台（爱课程）· 首都经济贸易大学",
+    publishedAt: null,
+    category: "courses",
+    summaryZh:
+      "首都经济贸易大学《思想道德与法治》：政治第 1 部分全覆盖（绪论＋6 章）；开课中 2026/09/15–2026/12/31，16 周，3万+ 人选课；2026-12-31 结课，之后能否回放、是否重开未验证，适用年份 2026·往年参考。",
+    points: [
+      "政治第 1 部分全部：绪论＋6 章（人生真谛、远大理想、优良传统、价值要求、道德规范、法治思想，含宪法、法治思维、法律权利与义务），适用年份 2026·往年参考。",
+      "不覆盖毛概、习概、二十大/四中全会精神、时事政治——那几部分见同栏另两门政治课。",
+      "开课中：2026/09/15–2026/12/31，16 周，3万+ 人选课；2026-12-31 即结课，之后能否回放、是否重开未验证。",
+      "需注册登录才能选课学习；中文授课。",
+      "费用口径经课程页原文核实：课程页未写‘免费’二字，也未标价；智慧教育平台免费课程，学习免费；证书是否收费未说明。",
+    ],
+    politicsTopic: true,
+    relevance: "适合备考专升本政治的专科在读生，政治第 1 部分全覆盖，能直接选课从绪论开始。",
+    startHint: "从绪论开始",
+    fee: "智慧教育平台免费课程，学习免费；课程页未写‘免费’二字，也未标价",
+    needsApplication: false,
+    deadline: null,
+    needsLogin: false,
+    blockedReason: null,
+    chineseUrl: null,
+    titleOnly: false,
+    enrichState: "stored",
+    group: "anytime",
+    audienceStage: "专科在读",
+  },
+  {
+    title: "毛泽东思想和中国特色社会主义理论体系概论（秦永芳）— 桂林电子科技大学",
+    url: "https://www.icourse163.org/learn/GLIET-1206637827",
+    readUrl: "https://www.icourse163.org/learn/GLIET-1206637827",
+    officialUrl: "https://www.icourse163.org/learn/GLIET-1206637827",
+    source: "中国大学MOOC · 桂林电子科技大学",
+    publishedAt: null,
+    category: "courses",
+    summaryZh:
+      "桂林电子科技大学《毛泽东思想和中国特色社会主义理论体系概论》（秦永芳）：政治第 2 部分全覆盖，另含第 3 部分习概早期章节；链接是 /learn/ 学习页，未登录打开可能直接跳转登录；起止时间未验证，适用年份 2026·往年参考。",
+    points: [
+      "政治第 2 部分全部：绪论＋毛泽东思想、新民主主义革命、社会主义改造、社会主义道路初步探索、邓小平理论、「三个代表」、科学发展观；另含第 3 部分习概早期章节，适用年份 2026·往年参考。",
+      "不覆盖思想道德与法治、二十大/四中全会最新精神、时事政治。",
+      "注意：本链接是 /learn/ 学习页（非 /course/ 详情页），未登录打开可能直接跳转登录，需先登录再选课。",
+      "起止时间未验证：页面只写注意开放时间段与测验截止时间，未编造日期。",
+      "需注册登录；中文授课。",
+      "中国大学 MOOC 平台课程学习免费，仅认证证书付费；课程页未写‘免费’二字。",
+    ],
+    politicsTopic: true,
+    relevance: "适合备考专升本政治的专科在读生，政治第 2 部分全覆盖，能直接从绪论开始。",
+    startHint: "从绪论开始",
+    fee: "平台课程学习免费，仅认证证书付费",
+    needsApplication: false,
+    deadline: null,
+    needsLogin: false,
+    blockedReason: null,
+    chineseUrl: null,
+    titleOnly: false,
+    enrichState: "stored",
+    group: "anytime",
+    audienceStage: "专科在读",
+  },
+  {
+    title: "习近平新时代中国特色社会主义思想概论 — 南京大学（与国防科技大学联合）",
+    url: "https://www.icourse163.org/course/NJU-1475080162?tid=1488209454",
+    readUrl: "https://www.icourse163.org/course/NJU-1475080162?tid=1488209454",
+    officialUrl: "https://www.icourse163.org/course/NJU-1475080162?tid=1488209454",
+    source: "中国大学MOOC · 南京大学（与国防科技大学联合）",
+    publishedAt: null,
+    category: "courses",
+    summaryZh:
+      "南京大学《习近平新时代中国特色社会主义思想概论》（与国防科技大学联合）：政治第 3 部分全覆盖（导论＋17 章），是本轮唯一明确覆盖第 4 部分的候选——课程介绍原文写「将党的二十届三中全会、四中全会以及2025年中央经济工作会议精神全面融入教学内容」，适用年份 2026·往年参考。",
+    points: [
+      "政治第 3 部分全部：导论＋17 章（新时代、中国式现代化、党的全面领导、以人民为中心、全面深化改革开放、高质量发展、教育科技人才、全过程人民民主、依法治国、文化强国、民生、生态文明、国家安全、国防军队、「一国两制」、大国外交、全面从严治党），适用年份 2026·往年参考。",
+      "同时是本轮唯一明确覆盖第 4 部分的候选：课程介绍原文写「将党的二十届三中全会、四中全会以及2025年中央经济工作会议精神全面融入教学内容」。",
+      "不覆盖思想道德与法治、毛概前两篇、时事政治。",
+      "起止日期未验证（链接带 tid=1488209454 当前学期号，tid 可能随学期更换而失效），未编造日期。",
+      "需注册登录；中文授课。",
+      "中国大学 MOOC 平台课程学习免费，仅认证证书付费；课程页未写‘免费’二字。",
+    ],
+    politicsTopic: true,
+    relevance: "适合备考专升本政治的专科在读生，政治第 3 部分全覆盖、并明确覆盖第 4 部分，能直接从导论开始。",
+    startHint: "从导论开始",
+    fee: "平台课程学习免费，仅认证证书付费",
+    needsApplication: false,
+    deadline: null,
+    needsLogin: false,
+    blockedReason: null,
+    chineseUrl: null,
+    titleOnly: false,
+    enrichState: "stored",
+    group: "anytime",
+    audienceStage: "专科在读",
+  },
+  {
+    title: "计算机应用基础 — 商丘职业技术学院",
+    url: "https://www.icourse163.org/course/SQZY-1002123023",
+    readUrl: "https://www.icourse163.org/course/SQZY-1002123023",
+    officialUrl: "https://www.icourse163.org/course/SQZY-1002123023",
+    source: "中国大学MOOC · 商丘职业技术学院",
+    publishedAt: null,
+    category: "courses",
+    summaryZh:
+      "商丘职业技术学院《计算机应用基础》：信息技术要点一、二全覆盖，要点三几乎全覆盖，要点四部分覆盖；要点五多媒体无专门章节、要点七新一代信息技术仅一节；教材为《计算机应用基础》（Windows10+Office2016）第 3 版，版本较旧，适用年份 2026·往年参考。",
+    points: [
+      "要点一（第 1–2 单元：计算机发展及应用、数的表示与编码）、要点二（第 3 单元 Windows 操作系统应用）全覆盖，适用年份 2026·往年参考。",
+      "要点三几乎全覆盖：第 4–7 单元 Word、第 8–10 单元 Excel、第 11–12 单元 PowerPoint。",
+      "要点四部分覆盖：第 13 单元互联网应用（IP 地址、Internet 应用）；要点六极少：仅第 14 单元「360安全套装」一节。",
+      "不覆盖/薄弱：要点五多媒体（无专门章节）、要点七新一代信息技术（仅第 1 单元一节）、要点四的网络体系结构/互连设备理论较浅。",
+      "教材为《计算机应用基础》（Windows10+Office2016）第 3 版，版本较旧；起止时间未验证。",
+      "需注册登录；中文授课。",
+      "中国大学 MOOC 平台课程学习免费，仅认证证书付费；课程页未写‘免费’二字。",
+    ],
+    itTopic: true,
+    relevance: "适合备考专升本信息技术的专科在读生，Word/Excel/PowerPoint 三大块几乎全覆盖，能直接从第 1 单元开始。",
+    startHint: "从第 1 单元计算机发展及应用开始",
+    fee: "平台课程学习免费，仅认证证书付费",
+    needsApplication: false,
+    deadline: null,
+    needsLogin: false,
+    blockedReason: null,
+    chineseUrl: null,
+    titleOnly: false,
+    enrichState: "stored",
+    group: "anytime",
+    audienceStage: "专科在读",
+  },
+  {
+    title: "大学计算机基础 — 东北石油大学（吴雅娟等）",
+    url: "https://www.chinaooc.com.cn/course/69caeff595df98bb2746a77f",
+    readUrl: "https://www.chinaooc.com.cn/course/69caeff595df98bb2746a77f",
+    officialUrl: "https://www.chinaooc.com.cn/course/69caeff595df98bb2746a77f",
+    source: "国家高等教育智慧教育平台（学银在线）· 东北石油大学",
+    publishedAt: null,
+    category: "courses",
+    summaryZh:
+      "东北石油大学《大学计算机基础》（吴雅娟等）：信息技术要点一、二、四、五、七有对应章节，要点三部分覆盖；不覆盖要点六信息安全；另有数据库、数据结构、Python 超纲内容；已结课 2026/03/26–2026/09/26，回放未确认；版本较旧（Windows 7），适用年份 2026·往年参考。",
+    points: [
+      "要点一（计算机概述、信息的表示与运算、计算模型与计算原理、算法基础）、要点二（操作系统章：Windows 7 基本操作、文件和文件夹管理）全覆盖，适用年份 2026·往年参考。",
+      "要点三部分覆盖（Office 实验和测验章）、要点四（计算机网络基础章）、要点五（多媒体应用技术章：多媒体基础知识＋Photoshop 基础与工具）、要点七（计算机前沿技术章：物联网、云计算、大数据、人工智能、区块链）。",
+      "不覆盖要点六信息安全（大纲无专门章节）。",
+      "超纲内容：数据库基础、数据结构、Python 程序设计——学信息技术时可跳过。",
+      "已结课（2026/03/26–2026/09/26），回放未确认；版本较旧（Windows 7）。",
+      "需注册登录；中文授课。",
+      "费用口径经课程页原文核实：课程页未写‘免费’二字，也未标价；智慧教育平台免费课程，学习免费；证书是否收费未说明。",
+    ],
+    itTopic: true,
+    relevance: "适合备考专升本信息技术的专科在读生，要点一、二、四、五、七都有对应章节，能直接从计算机概述章开始；注意要点六要另找资料。",
+    startHint: "从计算机概述章开始",
+    fee: "智慧教育平台免费课程，学习免费；课程页未写‘免费’二字，也未标价",
+    needsApplication: false,
+    deadline: null,
+    needsLogin: false,
+    blockedReason: null,
+    chineseUrl: null,
+    titleOnly: false,
+    enrichState: "stored",
+    group: "anytime",
+    audienceStage: "专科在读",
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -6240,9 +6131,13 @@ export const CURATED_LEARNING_ANYTIME: CuratedLearningItem[] = [
 // the working order is Python basics (item 6) → verification method via
 // the DeepSeek / generative-AI courses (item 5 ch.3, item 4 ch.5 §5.9)
 // → the BIT security course's system view (item 7 ch.6 & 8).
+// Item 7 (the BIT course) is ALSO the 随时可学 list's network-security
+// course: since the z-round dedup (2026-11-24) it lives only here, with
+// the 学堂在线/smartedu entry's facts merged into its card, so the
+// merged learning list shows it exactly once while both views keep it.
 // ---------------------------------------------------------------------------
 
-export const CURATED_LEARNING_AI: CuratedLearningItem[] = [
+const CURATED_LEARNING_AI: CuratedLearningItem[] = [
   {
     title: "人工智能应用基础（北京电子科技职业学院）",
     url: "https://www.icourse163.org/course/DKY-1460382164",
@@ -7886,7 +7781,7 @@ export const Actions = {
 
   getLearning: defineAction({
     description:
-      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生； since 2026-11-23 the stage signals — middle school(s), 中小学， 初中， 高中生， 中六， JUPAS, DSE, 研究生/硕士研究生 — are matched against title + summary + points + audienceStage together, so an item whose stage is stated only in its body, e.g. an HKU undergraduate item naming JUPAS/中六 in its points, is excluded too), pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships), activity write-ups whose summary dates the event in the past (\"X月X日……举行/举办/召开\" with no replay and no sign-up, e.g. the 东湖大咖公开课 report), 专硕/学硕 master's-stage items (e.g. the 专硕 dorm-policy news), scholarships limited to one local school district's students or to high-school students only (school district / juniors and seniors / high school football / high school athlete / 学区 / 高中生， e.g. the St. Joseph scholarship and the People high-school athlete scholarship story) and expired intakes are all filtered out, so the list may honestly be empty. 自 2026-11-23 起另有两条规则：只有宣传博客、限时试听或无法核实免费范围的内容不进学习栏（课程卡必须直接链接到可免费学习的具体课程、练习或讲座回放；免费注册、仅证书收费的课程保留）；已发放/已颁发类报道不进可报名列表且 needsApplication 纠正为 false，只有官方页面确认报名已开放、报名免费且申请范围包含中国专科在读生时才列入，官方明确滚动报名或常年开放的项目即使没有截止日期也可保留。 HTML entities (&#…; and &…;, incl. double-encoded forms) are decoded in titles, points and summaries at ingest and on every read (2026-11-23), and an unenriched item's summary/relevance line is rebuilt from complete sentences of its own source summary — never cut mid-sentence and never a fabricated translation. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip. Since 2026-11-23 the list is split into two display groups via each item's group field: twenty-seven hand-verified free resources that can be started right now (CURATED_LEARNING_ANYTIME — 网络安全/英语公开课， authorised CTF practice, a Cambridge lecture recording, plus CS50/编程、Web 安全实训、高等数学； each with a startHint naming the first lesson or exercise) lead the items array as group=anytime, followed by pool courses/resources (also anytime); pool opportunities with a deadline in the next 30 days and a confirmed official entry are group=upcoming （近期可报名）; a rolling / long-term-open opportunity in the 近期可报名 class is group=upcoming even without a deadline, and after the z-round two-class gate no pool item keeps group=null. The curated 近期可报名 set is empty this round — no official page was verified as explicitly open and free — so that group may honestly show its empty state. 自 2026-11-23 起，池内条目只有含真实可学内容（课程/讲座/回放/练习/实验）才进随时可学；纯政策新闻（征求意见稿、管理条例/办法类通知，如《教材管理条例（征求意见稿）》）由学习栏规则滤掉，永不为 group=anytime。自 2026-11-23 起另有 7 门人工核实的免费中文 AI 课程（CURATED_LEARNING_AI）作为持久精选随随时可学一同返回，每门带 aiTopic=true 供客户端的「AI 学习」话题筛选使用（能学什么/需要什么基础/从哪一课开始都写在卡上；全部免费学习、需免费注册、仅认证证书付费）；池内条目永不带 aiTopic。自 2026-11-23 起，Coursera 博客《Introducing AI Series on Coursera》（背后是 Coursera Plus 付费订阅、无单门免费带中文字幕课程、面向在职人士）由宣传博客规则从学习栏整个移除，不再保留随时可学位置；吴恩达《AI for Everyone》因只有非官方搬运、正版免费旁听与中文字幕未核实而不收录。自 2026-11-24 起另有一条确定性规则：标题含「夜校」、费用未说明、无 startHint、无截止日期且链接不在课程/学习平台域名上的条目，按纯新闻滤掉（如广州日报大洋网的青年夜校生活方式报道——没有任何具体课程、报名入口或免费学习入口）；带费用说明或开始提示的真实夜校课程不受影响。自 2026-11-24 起另有两类守门规则（z-round）：池内条目只有符合随时可学（有明确的免费课程、练习或回放入口；免费注册、仅证书收费保留）或近期可报名（有主办方官方报名入口、确认当前开放、报名免费且专科在读符合条件；官方明确长期/滚动开放的项目可以没有截止日期）才保留，两类都不满足的条目从学习列表彻底移除，不再进入「其他学习机会」；仅 needsApplication=true、未核实费用的招生/奖学金汇总、已颁发获奖名单、论坛邀请、博客文章和天气新闻等均被滤掉。自 2026-11-24 起再收紧（aa-round）：opportunities 类条目只能经「近期可报名」类合格，不能再靠「随时可学」的文本碎片混入后以 group=null 落进「其他学习机会」；随时可学的免费证据须由 免费 直接绑定课程/练习/回放等可学入口（裸「免费开放」和「免费…（隔字）…课程」不再算数），可学信号不再认裸字「课」（停课不算课程）；标题为天气/气象预报预警类且无自身学习入口的条目按纯新闻滤掉；汇总/盘点类标题不算单项官方报名入口，Outlook safelinks 跳转链接不算主办方官方入口，范围证据里的裸「不限」须为学历/专业/学校/年级不限才算。学习缓存键升至 learning:all:v3，旧缓存不再被读到。自 2026-11-24 起同一课程在两个平台的入口去重（`collapseSameCourseEntries`，入库 `loadLearning` 与每次 `getLearning` 读回都执行，`getDailyDigest` 经 `loadLearning` 同样去重）：北理工《网络安全——应用技术与工程实践》曾在学堂在线与 MOOC 各有一条精选，去重只保留带 `aiTopic` 的 MOOC 条目（2026-11-26 起学堂在线入口已从随时可学精选移出）；合并列表 34 条、AI 筛选仍 7 条；去重键为归一化标题（去标点/空白/横线变体）＋学校（标题末尾括号里的学校优先，否则取来源末段的学校，均须含“大学/学院/学校”字样）。自 2026-11-26 起另有「英语」「高等数学」话题筛选：englishTopic 标 7 门：国防科大《大学英语（口语）》（日常英语方向；2026 年考试说明不考听力口语，不标为对齐考试）与集美《英语听力技能与实践》（日常英语），另有 5 门专升本英语课（河南科大《大学英语（四）》、长安《大学英语读写（一）》、新通用大学英语（一）、南京大学《大学英语学术阅读与写作》与《英汉互译方法与技巧》）；mathTopic 标 8 门：江苏农林《高等数学（一）》（高数路线第 1–3 阶段）、可汗学院中文站（覆盖全部 6 阶段）、同济《高等数学（一）》（第 1–2 阶段）、同济《高等数学（二）》（第 3–4 阶段）、《高等数学（下）》（第 5–6 阶段为主，附带第 4 阶段）与南京工大《高等数学（一）》（第 1–4 阶段）、江西理工大学《高等数学（一）》（第 1–3 阶段）与江西理工大学《高等数学（二）》（第 4–6 阶段）；池内条目永不带这两个字段。2026-11-26 Tier 2（用户 22:54 批准）：上述 10 门 MOOC 课按平台免费口径上架（平台课程学习免费，仅认证证书付费；课程页未写‘免费’二字），清华《生活英语听说》因链接未验证暂缓，福州大学《网络空间安全概论》与上交《信息安全数学基础》不加。任何条目都不标「江西专升本真题」。",
+      "Returns the 学习 (learning) column: courses/lectures, learning resources and student opportunities for students, newest first, with a Chinese one-line summary per item, plus stage and application deadline when the source states them. Only still-actionable items are returned (2026-11-22): the strict filter applies to the FULL list on every response — expired-deadline opportunities, reports of already-finished events （研讨会/收官/获奖名单）, wrong-stage items （中小学/高中， 博士/硕士研究生招生； since 2026-11-23 the stage signals — middle school(s), 中小学， 初中， 高中生， 中六， JUPAS, DSE, 研究生/硕士研究生 — are matched against title + summary + points + audienceStage together, so an item whose stage is stated only in its body, e.g. an HKU undergraduate item naming JUPAS/中六 in its points, is excluded too), pure news reports, industry forums, offers restricted to one foreign country's own students （只限巴基斯坦/马来西亚等）, offers restricted to one specific employer's employees or their children (only for employees / employees' children / child of an employee, incl. \"employee or child of an employee\" / 只限…员工（子女）, e.g. the WCMA dairy-company scholarships), activity write-ups whose summary dates the event in the past (\"X月X日……举行/举办/召开\" with no replay and no sign-up, e.g. the 东湖大咖公开课 report), 专硕/学硕 master's-stage items (e.g. the 专硕 dorm-policy news), scholarships limited to one local school district's students or to high-school students only (school district / juniors and seniors / high school football / high school athlete / 学区 / 高中生， e.g. the St. Joseph scholarship and the People high-school athlete scholarship story) and expired intakes are all filtered out, so the list may honestly be empty. 自 2026-11-23 起另有两条规则：只有宣传博客、限时试听或无法核实免费范围的内容不进学习栏（课程卡必须直接链接到可免费学习的具体课程、练习或讲座回放；免费注册、仅证书收费的课程保留）；已发放/已颁发类报道不进可报名列表且 needsApplication 纠正为 false，只有官方页面确认报名已开放、报名免费且申请范围包含中国专科在读生时才列入，官方明确滚动报名或常年开放的项目即使没有截止日期也可保留。 HTML entities (&#…; and &…;, incl. double-encoded forms) are decoded in titles, points and summaries at ingest and on every read (2026-11-23), and an unenriched item's summary/relevance line is rebuilt from complete sentences of its own source summary — never cut mid-sentence and never a fabricated translation. Also returns upcoming deadlines (next 30 days, soonest first) for the reminder strip. Since 2026-11-23 the list is split into two display groups via each item's group field: twenty hand-verified free resources that can be started right now (CURATED_LEARNING_ANYTIME — 英语、 高等数学、 政治、 信息技术公开课； each with a startHint naming the first lesson or exercise) lead the items array as group=anytime, followed by pool courses/resources (also anytime); pool opportunities with a deadline in the next 30 days and a confirmed official entry are group=upcoming （近期可报名）; a rolling / long-term-open opportunity in the 近期可报名 class is group=upcoming even without a deadline, and after the z-round two-class gate no pool item keeps group=null. The curated 近期可报名 set is empty this round — no official page was verified as explicitly open and free — so that group may honestly show its empty state. 自 2026-11-23 起，池内条目只有含真实可学内容（课程/讲座/回放/练习/实验）才进随时可学；纯政策新闻（征求意见稿、管理条例/办法类通知，如《教材管理条例（征求意见稿）》）由学习栏规则滤掉，永不为 group=anytime。自 2026-11-23 起另有 7 门人工核实的免费中文 AI 课程（CURATED_LEARNING_AI）作为持久精选随随时可学一同返回，每门带 aiTopic=true 供客户端的「AI 学习」话题筛选使用（能学什么/需要什么基础/从哪一课开始都写在卡上；全部免费学习、需免费注册、仅认证证书付费）；池内条目永不带 aiTopic。自 2026-11-23 起，Coursera 博客《Introducing AI Series on Coursera》（背后是 Coursera Plus 付费订阅、无单门免费带中文字幕课程、面向在职人士）由宣传博客规则从学习栏整个移除，不再保留随时可学位置；吴恩达《AI for Everyone》因只有非官方搬运、正版免费旁听与中文字幕未核实而不收录。自 2026-11-24 起另有一条确定性规则：标题含「夜校」、费用未说明、无 startHint、无截止日期且链接不在课程/学习平台域名上的条目，按纯新闻滤掉（如广州日报大洋网的青年夜校生活方式报道——没有任何具体课程、报名入口或免费学习入口）；带费用说明或开始提示的真实夜校课程不受影响。自 2026-11-24 起另有两类守门规则（z-round）：池内条目只有符合随时可学（有明确的免费课程、练习或回放入口；免费注册、仅证书收费保留）或近期可报名（有主办方官方报名入口、确认当前开放、报名免费且专科在读符合条件；官方明确长期/滚动开放的项目可以没有截止日期）才保留，两类都不满足的条目从学习列表彻底移除，不再进入「其他学习机会」；仅 needsApplication=true、未核实费用的招生/奖学金汇总、已颁发获奖名单、论坛邀请、博客文章和天气新闻等均被滤掉。自 2026-11-24 起再收紧（aa-round）：opportunities 类条目只能经「近期可报名」类合格，不能再靠「随时可学」的文本碎片混入后以 group=null 落进「其他学习机会」；随时可学的免费证据须由 免费 直接绑定课程/练习/回放等可学入口（裸「免费开放」和「免费…（隔字）…课程」不再算数），可学信号不再认裸字「课」（停课不算课程）；标题为天气/气象预报预警类且无自身学习入口的条目按纯新闻滤掉；汇总/盘点类标题不算单项官方报名入口，Outlook safelinks 跳转链接不算主办方官方入口，范围证据里的裸「不限」须为学历/专业/学校/年级不限才算。学习缓存键升至 learning:all:v3，旧缓存不再被读到。自 2026-11-24 起同一课程在两个平台的入口去重（`collapseSameCourseEntries`，入库 `loadLearning` 与每次 `getLearning` 读回都执行，`getDailyDigest` 经 `loadLearning` 同样去重）：北理工《网络安全——应用技术与工程实践》曾在学堂在线与 MOOC 各有一条精选，去重只保留带 `aiTopic` 的 MOOC 条目（2026-11-26 起学堂在线入口已从随时可学精选移出）；合并列表 27 条、AI 筛选仍 7 条；去重键为归一化标题（去标点/空白/横线变体）＋学校（标题末尾括号里的学校优先，否则取来源末段的学校，均须含“大学/学院/学校”字样）。自 2026-11-26 起另有「英语」「高等数学」话题筛选：englishTopic 标 7 门：国防科大《大学英语（口语）》（日常英语方向；2026 年考试说明不考听力口语，不标为对齐考试）与集美《英语听力技能与实践》（日常英语），另有 5 门专升本英语课（河南科大《大学英语（四）》、长安《大学英语读写（一）》、新通用大学英语（一）、南京大学《大学英语学术阅读与写作》与《英汉互译方法与技巧》）；mathTopic 标 8 门：江苏农林《高等数学（一）》（高数路线第 1–3 阶段）、可汗学院中文站（覆盖全部 6 阶段）、同济《高等数学（一）》（第 1–2 阶段）、同济《高等数学（二）》（第 3–4 阶段）、《高等数学（下）》（第 5–6 阶段为主，附带第 4 阶段）与南京工大《高等数学（一）》（第 1–4 阶段）、江西理工大学《高等数学（一）》（第 1–3 阶段）与江西理工大学《高等数学（二）》（第 4–6 阶段）；池内条目永不带这两个字段。2026-11-26 Tier 2（用户 22:54 批准）：上述 10 门 MOOC 课按平台免费口径上架（平台课程学习免费，仅认证证书付费；课程页未写‘免费’二字），清华《生活英语听说》因链接未验证暂缓，福州大学《网络空间安全概论》与上交《信息安全数学基础》不加。自 2026-11-27 起另有「政治」「信息技术」话题筛选：politicsTopic 标 3 门（首都经济贸易大学《思想道德与法治》、桂林电子科技大学《毛泽东思想和中国特色社会主义理论体系概论》、南京大学《习近平新时代中国特色社会主义思想概论》）；itTopic 标 2 门（商丘职业技术学院《计算机应用基础》、东北石油大学《大学计算机基础》）；同时 12 门网安/编程实战课（湖南铁道、电子科大、CyLab、Bandit、剑桥 Security、CS50x、freeCodeCamp、TryHackMe、PortSwigger、MIT OCW 6.858、CS50 网络安全、思科）从随时可学移除，学习栏按考试科目重组为英语 7 + 高数 8 + 政治 3 + 信息技术 2 = 20 门随时可学精选；广西大学《大学计算机》因大纲近半 Python 超纲不加；池内条目永不带这两个字段。任何条目都不标「江西专升本真题」。",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
