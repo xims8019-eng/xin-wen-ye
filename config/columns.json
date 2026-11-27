@@ -59,17 +59,15 @@
   "myWorld": {
     "cacheTtlMinutes": 60,
     "dailyPicks": 5,
-    "note": "栏目名在五类结构里是「国内外观察与阅读」。同一事件按标题归一化键合并；每日精选最多 5 条、按主题轮转取；完整列表最多 40 条可按主题筛选。分类新闻（财经→经济、国际→政治、科技→科技）也并入候选池，且已在分类入库时解析为直达地址。八国名单只约束海外机会栏，不限制本栏的全球新闻覆盖。书籍/历史/语言学习是每周精选；具体语言课程和考试报名归学习栏。",
+    "note": "栏目名在五类结构里是「国内外观察与阅读」。同一事件按标题归一化键合并；每日精选最多 5 条、按主题轮转取；完整列表最多 40 条可按主题筛选。2026-11-27 国际化配比轮起以国际新闻为主：每条带 scope（domestic/international，来源属性+标题/摘要关键词确定性判定），非每周的国内条目须过国家级重大门槛（中央部委宏观政策、全国口径 GDP/就业/进出口指标、升学出境动态）才入池；每日精选国内最多 1 条、完整列表国内最多 8 条（20%），无重大国内消息时国内可为 0 条。英文版 Google 新闻三路（business/world/tech）与 6 个国际英文直取源见 config/feeds.json 的 worldFeeds。八国名单只约束海外机会栏，不限制本栏的全球新闻覆盖。书籍/历史/语言学习是每周精选（不适用国内门槛）；具体语言课程和考试报名归学习栏。",
     "title": "国内外观察与阅读（原「我关注的世界」）",
     "topicSources": {
       "书籍/历史/语言学习": "每周精选，Bing 搜索",
-      "出行安全": "Bing 搜索「出行安全 提醒 旅行安全」",
-      "国内经济": "分类新闻「财经」+ Bing 搜索「中国 经济 数据 政策」",
       "地区冲突": "Bing 搜索「地区冲突 局势」",
-      "政治": "分类新闻「国际」",
-      "科技": "分类新闻「科技」",
-      "经济": "分类新闻「财经」",
-      "网络安全": "Bing 搜索「网络安全 漏洞 数据泄露」"
+      "政治": "英文版 Google 新闻 WORLD + BBC World + The Guardian + The Japan Times + RNZ（直取 RSS）",
+      "科技": "英文版 Google 新闻 TECHNOLOGY + TechCrunch（直取 RSS）",
+      "经济": "英文版 Google 新闻 BUSINESS + CNA 亚太（直取 RSS）",
+      "网络安全": "Bing 搜索英文「cybersecurity vulnerability data breach」"
     },
     "weeklyQueries": [
       {
@@ -87,7 +85,8 @@
     ],
     "localFestivalTrafficFilter": "2026-11-22c 新增（isLocalFestivalTrafficNotice）：面向单一地方居民的地方节庆/假期交通出行提示（州庆/县庆/庙会/秋假/「@X 的小伙伴们」/本地居民信号 + 标题含交通/出行/管制/提示，或本身就是对本地人的交通提示），且文中不带相关范围（江西含各地市 / 全国 / 八个留学目的地）时，从观察栏池和每次 getMyWorld 返回中移除；没有提示性质的节庆新闻报道不受影响。实测移出：大理州庆交通提示；泰国水灯节等未被误伤。",
     "worldRelevanceGrounded20261122m": "2026-11-22m 新增（worldRelevanceFor，取代按主题套模板的 WORLD_TOPIC_RELEVANCE）：「和我有什么关系」必须从本条自己的标题/摘要找依据——灾难/事故信号优先判为安全事件，签证/留学/出行类表述只有当条目自己的文本涉及签证、移民、出入境或留学时才用，什么都对不上时写诚实的中性句，不套模板。已核实例子：「印尼糖果厂火灾现场整理出24个尸袋」（新华网客户端）此前配的是政治模板「国际政治变化可能影响签证、留学与出行安排」，火灾与签证无关，现改为安全事故表述。标题同样经 decodeEntities 解码后显示；摘要的旧半词截断在读回时修掉。",
-    "weeklyPicksFirstThree20261122m": "2026-11-22m 新增（仅前端，client/src/App.tsx 的 WorldSection）：首页「每周精选」先展示 3 条，其余在原地展开再看（按钮「展开其余 N 条」/「收起」）；接口仍返回最多 9 条，不动服务端与缓存。"
+    "weeklyPicksFirstThree20261122m": "2026-11-22m 新增（仅前端，client/src/App.tsx 的 WorldSection）：首页「每周精选」先展示 3 条，其余在原地展开再看（按钮「展开其余 N 条」/「收起」）；接口仍返回最多 9 条，不动服务端与缓存。",
+    "worldRatio20261127": "2026-11-27 新增（classifyWorldScope / isMajorDomesticWorldItem / isWorldDomesticBlocked / applyWorldQuota，server/src/actions.ts）：WorldItem 加 scope 字段并进 worldItemSchema；分类只看来源属性与标题/摘要关键词（中英双语），优先级：跨境措施（关税/制裁/出口管制）＞外国地点且无强国内 framing＞强国内 framing＞外国地点＞中国省市名＞来源属性＞bare 中国/国内提及＞默认国际；国内门槛：中央部委/全国性会议+宏观主题，或全国口径 GDP/失业率/CPI/进出口指标，或 China+GDP/增长/经济/进出口英文报道；省市打头的条目除非带国务院/全国/中央字样一律不算重大；每周精选不适用门槛。配比：daily 5 条中国内最多 1 条、all 40 条中国内最多 8 条，入库与每次读回（loadMyWorld 缓存命中路径 + getMyWorld handler）都执行，缓存 key 仍为 world:all:v3（旧缓存读回时现算 scope、过门槛、按配比截取）。源变更：新增 WORLD_FEEDS 6 个直取源（BBC News、The Guardian、TechCrunch、CNA 亚太、The Japan Times、RNZ News，2026-11-27 实测全部 HTTP 200、摘要完整、链接直达）；Google 新闻三路改用世界栏专用 WORLD_GN_TOPICS（英文版 hl=en-US&gl=US，仍走 resolveCategoryIngest 直链解析+meta 摘要回填；资讯页 9 分类仍走 zh-CN 的 loadCategory，不受影响）；停用 Bing「国内经济：中国 经济 数据 政策」（100% 国内、固定占 daily 1 席）与「出行安全 提醒 旅行安全」（约 80% 国内地方交通提示）；网络安全改英文查询；地区冲突保留中文查询。世界栏历来没有 Gemini 中文摘要/润色流程（润色只在海外/学习/江西三栏），新增英文源按现有先例展示原文摘要 + 中文「和我有什么关系」行。NHK World 无 RSS（两条路径均 404）、RNZ World 仅 2 条，均未采用。"
   },
   "note": "从 2026-11-22c 线上版 server/src/actions.ts 提取（JIANGXI_QUERIES、OVERSEAS_QUERIES、OVERSEAS_VISA_QUERIES、OVERSEAS_JOB_QUERIES、MYWORLD_*、CURATED_VISA_ITEMS 等常量与各过滤函数）。c 版新增三条首页选稿规则：海外「只讲单一外国国籍申请人」移出首页（isForeignApplicantsOnlyItem）、江西已结束考区提醒移出可见列表（isJiangxiEndedExamReminder）、观察栏地方节庆交通提示过滤（isLocalFestivalTrafficNotice），以及越南国籍/目的地辨析修正（foreignApplicantSignal 新分支）。m 版（2026-11-22）新增：江西内容标签与适用年份、通用实习改判、升学栏条件优先与趋势新闻过滤、政策按事项分生效日期、关系句有原文依据与文本卫生（实体解码／词界截断／要点去重／单源摘要）、每周精选首页先展示 3 条；n 版（2026-11-23）新增：江西关系句同标签内按标题内容信号区分再加同栏去重兜底、HTML 实体全字段解码（定点迭代）与整句重建、学习栏错学段信号扩到标题+摘要+要点+audienceStage 全字段；详见各栏对应条目。s 版（2026-11-23）新增：江西官方-only（只收 jxeea.cn 与 jyt.jiangxi.gov.cn 原文）、学习「AI 学习」筛选、健身栏目，详见各栏对应条目。",
   "overseas": {

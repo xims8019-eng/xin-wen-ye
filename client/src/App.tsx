@@ -1695,7 +1695,7 @@ function WorldSection() {
           </button>
         </div>
       </div>
-      <p className="mt-1 text-xs text-[var(--dim)]">国内经济，以及国际经济、政治、科技、网络安全、地区冲突、留学与出行安全 · 按重要性筛选，每天最多精选 5 条，同一事件已合并 · 全球覆盖，不受海外机会八国名单限制</p>
+      <p className="mt-1 text-xs text-[var(--dim)]">以国际经济、政治、科技、网络安全、地区冲突为主；国内只留国家级重大宏观与升学出境相关动态，首页精选国内最多 1 条 · 全球覆盖，不受海外机会八国名单限制</p>
       <div className="mt-3 flex flex-wrap gap-2" role="tablist" aria-label="世界主题">
         {topics.map((t) => (
           <button

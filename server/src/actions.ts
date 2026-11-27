@@ -5015,15 +5015,58 @@ async function loadOverseas(
 interface WorldItem extends FeedItem {
   topic: string;
   weekly: boolean;
+  /** 国内/国际标识（2026-11-27）：classifyWorldScope 在入库时打上，读回时对旧缓存现算补齐。 */
+  scope: WorldScope;
 }
 
 const WORLD_TTL_MS = 60 * 60 * 1000;
 
 const WORLD_DAILY_QUERIES: Array<{ topic: string; q: string }> = [
-  { topic: "网络安全", q: "网络安全 漏洞 数据泄露" },
-  { topic: "出行安全", q: "出行安全 提醒 旅行安全" },
+  // 2026-11-27 国际化配比轮：Bing 查询只剩两路。网络安全改英文查询
+  // （原中文查询实测约一半国内）；地区冲突保留中文查询（实测已约
+  // 80% 国际）。「国内经济：中国 经济 数据 政策」停用：100% 国内，
+  // 且 daily 轮询固定占 1 席，是首页国内占比的最大单项来源；
+  // 「出行安全 提醒 旅行安全」停用：实测约 80% 国内地方交通提示。
+  { topic: "网络安全", q: "cybersecurity vulnerability data breach" },
   { topic: "地区冲突", q: "地区冲突 局势" },
-  { topic: "国内经济", q: "中国 经济 数据 政策" },
+];
+
+/**
+ * 国际英文直取源（2026-11-27 国际化配比轮，研究员 2026-11-27 实测：
+ * 全部 HTTP 200、有效 RSS/Atom、链接直达、摘要完整）。走 fetchText +
+ * parseFeed 直取，与 loadFeedItems 同款，不走 loadCategory 的
+ * resolveCategoryIngest 路径（逐条验证 + meta 回填，45 秒以上预算，
+ * 6 个源 × 20–45 条会显著拖慢且无必要）。去重沿用 titleKey + bigram
+ * 相似度（BBC World 与 Google world 分类的 BBC 条目撞题已覆盖）。
+ * 注：BBC World 已在 FEED_CATALOG（bbc-world）中，这里是接入
+ * loadMyWorld，不是加进目录。CNA 用 https 形式，服务端 fetch 会跟随
+ * 其 301 到 api/v1/rss-outbound-feed（实测链路终点 200）。
+ * 摘要语言：世界栏历来没有 Gemini 润色流程（润色只在海外/学习/
+ * 江西三栏），英文源摘要与此前经 Google 新闻进来的 BBC/NYT 条目
+ * 一样原文展示，中文「和我有什么关系」行由 worldRelevanceFor 生成。
+ */
+const WORLD_FEEDS: Array<{ name: string; url: string; topic: string; limit: number }> = [
+  { name: "BBC News", url: "https://feeds.bbci.co.uk/news/world/rss.xml", topic: "政治", limit: 20 },
+  { name: "The Guardian", url: "https://www.theguardian.com/world/rss", topic: "政治", limit: 25 },
+  { name: "TechCrunch", url: "https://techcrunch.com/feed/", topic: "科技", limit: 20 },
+  { name: "CNA 亚太", url: "https://www.channelnewsasia.com/rss/latest_cna_asiapac_rss.xml", topic: "经济", limit: 20 },
+  { name: "The Japan Times", url: "https://www.japantimes.co.jp/feed/", topic: "政治", limit: 20 },
+  { name: "RNZ News", url: "https://www.rnz.co.nz/rss/news.xml", topic: "政治", limit: 25 },
+];
+
+/**
+ * 世界栏专用的英文版 Google 新闻（2026-11-27）：只改世界栏的三路
+ * business/world/tech，不动顶层 GN 常量——GN 是资讯页 9 个分类共用
+ * 的 zh-CN 参数，改它会把资讯页的头条/国内/财经/科技也变成英文版。
+ * 世界栏改为直接 fetchText + parseFeed 英文 RSS，再走与 loadCategory
+ * 相同的 resolveCategoryIngest（直链解析 + meta 摘要回填），资讯页
+ * 仍走 loadCategory 的 zh-CN 缓存，两条线互不干扰。
+ */
+const GN_EN = "hl=en-US&gl=US&ceid=US:en";
+const WORLD_GN_TOPICS: Array<{ topic: string; url: string }> = [
+  { topic: "经济", url: `https://news.google.com/rss/headlines/section/topic/BUSINESS?${GN_EN}` },
+  { topic: "政治", url: `https://news.google.com/rss/headlines/section/topic/WORLD?${GN_EN}` },
+  { topic: "科技", url: `https://news.google.com/rss/headlines/section/topic/TECHNOLOGY?${GN_EN}` },
 ];
 
 const WORLD_WEEKLY_QUERIES: Array<{ topic: string; q: string }> = [
@@ -5031,6 +5074,118 @@ const WORLD_WEEKLY_QUERIES: Array<{ topic: string; q: string }> = [
   { topic: "历史", q: "历史 新书 研究 考古" },
   { topic: "语言学习", q: "英语学习 语言学习 方法" },
 ];
+
+export type WorldScope = "domestic" | "international";
+
+/**
+ * 硬性配比（2026-11-27 国际化配比轮）：首页 daily 5 条中国内最多 1 条；
+ * 完整列表 all 40 条中国内最多 8 条（20%）。当轮没有特别重大的国内
+ * 政策/宏观消息时，国内为 0 条亦可，名额留给国际。配比在读回组装
+ * 列表时强制执行（applyWorldQuota），即使缓存池里国内条目多，也按
+ * 配比截取；getMyWorld 读回时再执行一次，旧缓存同样受约束。
+ */
+const WORLD_MAX_DOMESTIC_DAILY = 1;
+const WORLD_MAX_DOMESTIC_ALL = 8;
+
+// 国内/国际确定性分类（2026-11-27）：只看来源属性与标题/摘要关键词，
+// 不用模型判断。优先级：跨境措施（关税/制裁/出口管制是国家间措施，
+// 哪怕主语是中国）> 外国地点且无强国内 framing > 强国内 framing >
+// 外国地点（与弱国内信号并存时国际优先，如「北京会晤美国代表」）>
+// 中国省市名 > 来源属性（国际媒体/中文国内媒体）>  bare 中国/国内
+// 提及 > 默认国际（池子现以国际英文源为主，默认国际不致误杀国际条目）。
+const WORLD_CROSS_BORDER_RE =
+  /制裁|关税|贸易战|出口管制|脱钩|tariffs?|sanctions?|export controls?|trade war/i;
+const WORLD_INTL_PLACE_RE =
+  /美国|英国|法国|德国|意大利|西班牙|俄罗斯|乌克兰|以色列|巴勒斯坦|伊朗|伊拉克|印度|巴基斯坦|孟加拉|朝鲜|韩国|日本|越南|泰国|马来西亚|印尼|菲律宾|澳大利亚|加拿大|巴西|墨西哥|土耳其|沙特|阿联酋|卡塔尔|埃及|南非|尼日利亚|肯尼亚|欧盟|北约|联合国|美联储|新西兰|新加坡|爱尔兰|伦敦|巴黎|柏林|莫斯科|基辅|东京|首尔|堪培拉|渥太华|华盛顿|纽约|在美|赴美|留美|旅美|访美|在英|赴英|留英|在日|赴日|留日|在韩|赴韩|在澳|赴澳|在加|赴加|在新|赴新|\b(USA|U\.S\.|UK|EU|UN|NATO|Russia|Ukraine|Israel|Iran|India|Japan|South Korea|Australia|Canada|Brazil|France|Germany|Italy|Spain)\b/i;
+const WORLD_DOMESTIC_STRONG_RE =
+  /国内|我国|全国两会|全国人大|国务院常务会议|专升本|高考|中国(经济|股市|楼市|房价|就业|物价|消费|财政|货币|央行|GDP|国内生产总值|国务院|发改委|统计局|教育部|外交部|商务部|人社部)|中国.{0,8}(数据泄露|网络攻击|黑客|漏洞)|\bChina'?s\b.{0,24}\b(economy|GDP|growth|stock market|housing|employment|unemployment|inflation|exports?|imports?|central bank|Communist Party|Beijing)\b|\bChinese\b.{0,24}\b(economy|GDP|stock market|housing|employment|inflation|exports?|imports?|central bank|Communist Party)\b/;
+const WORLD_DOMESTIC_PLACE_RE =
+  /北京|上海|广州|深圳|杭州|成都|武汉|西安|南京|天津|重庆|苏州|长沙|郑州|青岛|大连|宁波|厦门|福州|合肥|济南|哈尔滨|沈阳|长春|石家庄|太原|呼和浩特|兰州|银川|西宁|乌鲁木齐|拉萨|昆明|贵阳|南宁|海口|南昌|九江|赣州|宜春|上饶|吉安|抚州|景德镇|萍乡|新余|鹰潭|香港|澳门|台湾|河北|山西|辽宁|吉林|黑龙江|江苏|浙江|安徽|福建|江西|山东|河南|湖北|湖南|广东|海南|四川|贵州|云南|陕西|甘肃|青海|内蒙古|广西|西藏|宁夏|新疆/;
+const WORLD_INTL_SOURCE_RE =
+  /bbc|guardian|techcrunch|channelnewsasia|\bcna\b|japantimes|rnz|nytimes|reuters|associated press|washington post|wall street journal|bloomberg|\bcnn\b|al jazeera|france 24|deutsche welle|\bnpr\b|the verge|ars technica|hacker news|bbc\.co\.uk|theguardian\.com|techcrunch\.com|channelnewsasia\.com|japantimes\.co\.jp|rnz\.co\.nz|nytimes\.com|reuters\.com/i;
+const WORLD_CN_SOURCE_RE =
+  /新华|新华社|人民日报|人民网|央视|CCTV|中新网|中新社|环球时报|环球网|澎湃|界面新闻|财新|第一财经|经济日报|光明日报|中国青年报|观察者网|中国日报|证券时报|证券日报|上海证券报|中国新闻网|央广网|中国政府网|gov\.cn|edu\.cn|xinhuanet|people\.com\.cn|cctv\.com|chinanews\.com|huanqiu\.com|thepaper\.cn/i;
+
+export function classifyWorldScope(it: {
+  title: string;
+  summary: string | null;
+  source: string;
+  url: string;
+}): WorldScope {
+  const text = `${it.title} ${it.summary ?? ""}`;
+  const src = `${it.source} ${it.url}`;
+  if (WORLD_CROSS_BORDER_RE.test(text)) return "international";
+  const intl = WORLD_INTL_PLACE_RE.test(text);
+  const domesticStrong = WORLD_DOMESTIC_STRONG_RE.test(text);
+  if (intl && !domesticStrong) return "international";
+  if (domesticStrong) return "domestic";
+  if (intl) return "international";
+  if (WORLD_DOMESTIC_PLACE_RE.test(text)) return "domestic";
+  if (WORLD_INTL_SOURCE_RE.test(src)) return "international";
+  if (WORLD_CN_SOURCE_RE.test(src)) return "domestic";
+  if (/中国|国内|我国/.test(text) || /\bChina\b|\bChinese\b/i.test(text)) return "domestic";
+  return "international";
+}
+
+/**
+ * 国内新闻极高门槛（2026-11-27）：要闻里的国内条目仅允许国家级重大
+ * 宏观政策、经济/就业大趋势、或直接影响升学与出境的国内动态；其余
+ * 一般性国内新闻、地方民生、社会花边全部过滤。确定性规则：中央部委/
+ * 全国性会议 + 宏观主题，或全国口径的 GDP/失业率/CPI/进出口指标，
+ * 或中国口径的 GDP/失业率/进出口英文报道。省市打头的条目（地方
+ * 发改委/统计局）除非带国务院/全国/中央字样，一律不算重大。
+ * 每周精选（书籍/历史/语言学习）是阅读挑选，不适用本门槛。
+ */
+const WORLD_MAJOR_BODY_RE =
+  /国务院|中央经济工作会议|全国人大|全国政协|政府工作报告|国家发展改革委|发改委|财政部|中国人民银行|央行|国家统计局|教育部|外交部|国家移民管理局|商务部|人力资源社会保障部|人社部|中央政治局/;
+const WORLD_MAJOR_TOPIC_RE =
+  /降准|降息|存款准备金率|LPR|贷款市场报价利率|宏观调控|GDP|国内生产总值|CPI|居民消费价格指数|城镇调查失业率|失业率|就业|进出口|外贸|财政政策|货币政策|特别国债|赤字|社会消费品零售总额|规模以上工业增加值|专升本|高考|研究生招生|留学|签证|出入境|护照|中外合作办学/;
+const WORLD_MAJOR_NATIONAL_RE =
+  /(全国|中国).{0,12}(GDP|国内生产总值|城镇调查失业率|居民消费价格指数|进出口总额|经济增长)/;
+const WORLD_MAJOR_EN_RE =
+  /\bChina'?s\b.{0,60}\b(GDP|growth|economy|unemployment rate|exports|imports)\b/i;
+const WORLD_PROVINCE_LEAD_RE =
+  /^(广东|江苏|浙江|山东|四川|河南|湖北|湖南|福建|江西|安徽|河北|山西|辽宁|吉林|黑龙江|陕西|甘肃|青海|贵州|云南|海南|内蒙古|广西|西藏|宁夏|新疆|北京|上海|天津|重庆|深圳|广州|杭州|成都|武汉|南京|西安|苏州|长沙|郑州|青岛|大连|宁波|厦门|福州|合肥|济南|哈尔滨|沈阳|长春|石家庄|太原|昆明|贵阳|南宁|海口|兰州|银川|西宁|乌鲁木齐|拉萨|呼和浩特)/;
+
+export function isMajorDomesticWorldItem(it: { title: string; summary: string | null }): boolean {
+  const text = `${it.title} ${it.summary ?? ""}`;
+  if (WORLD_PROVINCE_LEAD_RE.test(it.title.trim()) && !/国务院|全国|中央/.test(text)) return false;
+  if (WORLD_MAJOR_BODY_RE.test(text) && WORLD_MAJOR_TOPIC_RE.test(text)) return true;
+  if (WORLD_MAJOR_NATIONAL_RE.test(text)) return true;
+  if (WORLD_MAJOR_EN_RE.test(text)) return true;
+  return false;
+}
+
+/** 国内门槛拦截：非每周的国内条目，未过国家级重大门槛的不得入池/不得展示。 */
+function isWorldDomesticBlocked(it: { scope?: WorldScope; weekly: boolean; title: string; summary: string | null; source: string; url: string }): boolean {
+  if (it.weekly) return false;
+  const scope = it.scope ?? classifyWorldScope(it);
+  return scope === "domestic" && !isMajorDomesticWorldItem(it);
+}
+
+/** 给一条世界栏条目补 scope（旧缓存 v3 的条目没有该字段时现算）。 */
+function withWorldScope<T extends { title: string; summary: string | null; source: string; url: string; scope?: WorldScope }>(it: T): T & { scope: WorldScope } {
+  return { ...it, scope: it.scope ?? classifyWorldScope(it) };
+}
+
+/** 硬性配比截取：按时间顺序取满 maxTotal，国内条目最多 maxDomestic，超额的国内条目跳过、名额留给后面的国际条目。 */
+export function applyWorldQuota<T extends { scope?: WorldScope; title: string; summary: string | null; source: string; url: string }>(
+  items: T[],
+  maxTotal: number,
+  maxDomestic: number,
+): T[] {
+  const out: T[] = [];
+  let domestic = 0;
+  for (const it of items) {
+    if (out.length >= maxTotal) break;
+    if ((it.scope ?? classifyWorldScope(it)) === "domestic") {
+      if (domestic >= maxDomestic) continue;
+      domestic++;
+    }
+    out.push(it);
+  }
+  return out;
+}
 
 function titleKey(title: string): string {
   return title.replace(/[\s\p{P}]/gu, "").slice(0, 14);
@@ -5066,7 +5221,24 @@ function isLocalFestivalTrafficNotice(it: { title: string; summary: string | nul
 async function loadMyWorld(ctx: Ctx, force: boolean): Promise<{ daily: WorldItem[]; weekly: WorldItem[]; all: WorldItem[]; asOf: string }> {
   if (!force) {
     const cached = await readCache<{ daily: WorldItem[]; weekly: WorldItem[]; all: WorldItem[] }>(ctx, "world:all:v3", WORLD_TTL_MS);
-    if (cached) return { ...cached.data, asOf: cached.asOf };
+    if (cached) {
+      // 缓存 key 不 bump（仍为 world:all:v3）：旧缓存的条目在读回时现算
+      // scope、过国内门槛、按配比截取，下一轮刷新（TTL 60 分钟）再用
+      // 新源重建池子；旧缓存挡不住新配比。
+      const scoped = (list: WorldItem[]) => list.map(withWorldScope);
+      const daily = applyWorldQuota(
+        scoped(cached.data.daily).filter((it) => !isWorldDomesticBlocked(it)),
+        5,
+        WORLD_MAX_DOMESTIC_DAILY,
+      );
+      const weekly = scoped(cached.data.weekly);
+      const all = applyWorldQuota(
+        scoped(cached.data.all).filter((it) => !isWorldDomesticBlocked(it)),
+        40,
+        WORLD_MAX_DOMESTIC_ALL,
+      );
+      return { daily, weekly, all, asOf: cached.asOf };
+    }
   }
   const pool: WorldItem[] = [];
   const pushDedup = (items: FeedItem[], topic: string, weekly: boolean) => {
@@ -5080,20 +5252,38 @@ async function loadMyWorld(ctx: Ctx, force: boolean): Promise<{ daily: WorldItem
       // arrive pre-resolved at ingest (publisher-direct or linkless), and
       // anything that still carries a Google News relay token is stored
       // linkless — summary plus 复制标题 only, never a news.google.com URL.
-      pool.push({ ...it, url: isGnRelay(direct) ? "" : direct, topic, weekly });
+      const scoped: WorldItem = {
+        ...it,
+        url: isGnRelay(direct) ? "" : direct,
+        topic,
+        weekly,
+        scope: classifyWorldScope(it),
+      };
+      // 国内极高门槛：非每周的国内条目，未过国家级重大门槛的不入池。
+      if (isWorldDomesticBlocked(scoped)) continue;
+      pool.push(scoped);
     }
   };
-  // Category feeds already maintained by the 资讯 surface.
-  const catTopics: Array<{ cat: string; topic: string }> = [
-    { cat: "business", topic: "经济" },
-    { cat: "world", topic: "政治" },
-    { cat: "tech", topic: "科技" },
-  ];
+  // 英文版 Google 新闻三路（世界栏专用，见 WORLD_GN_TOPICS）：直接拉取
+  // 后走与 loadCategory 相同的 resolveCategoryIngest（直链解析 + meta
+  // 摘要回填），资讯页仍用 zh-CN 的 loadCategory 缓存，不受影响。
   await Promise.all(
-    catTopics.map(async ({ cat, topic }) => {
+    WORLD_GN_TOPICS.map(async ({ topic, url }) => {
       try {
-        const { items } = await loadCategory(ctx, cat, false);
+        const items = parseFeed(await fetchText(url), "Google 新闻", 30);
+        await resolveCategoryIngest(ctx, items);
         pushDedup(items.slice(0, 15), topic, false);
+      } catch {
+        // ignore
+      }
+    }),
+  );
+  // 六个国际英文直取源（WORLD_FEEDS）：链接已实测直达，不走
+  // resolveCategoryIngest，直接入池。
+  await Promise.all(
+    WORLD_FEEDS.map(async (f) => {
+      try {
+        pushDedup(parseFeed(await fetchText(f.url), f.name, f.limit), f.topic, false);
       } catch {
         // ignore
       }
@@ -5156,24 +5346,28 @@ async function loadMyWorld(ctx: Ctx, force: boolean): Promise<{ daily: WorldItem
     return tb - ta;
   };
   const dailyPool = merged.filter((it) => !it.weekly).sort(byTime);
-  // Daily picks: at most 5, round-robin across topics so one topic cannot
-  // fill the whole homepage list.
-  const daily: WorldItem[] = [];
+  // Daily picks: round-robin across topics so one topic cannot fill the
+  // whole homepage list; the full round-robin order is then cut by the
+  // hard domestic quota (at most 1 domestic in 5 — see applyWorldQuota),
+  // so a domestic item early in the order never crowds out international
+  // items later in it. Domestic may be 0 when no major domestic item
+  // is in the pool.
+  const dailyOrder: WorldItem[] = [];
   const topics = [...new Set(dailyPool.map((it) => it.topic))];
-  for (let round = 0; daily.length < 5; round++) {
+  for (;;) {
     let progressed = false;
     for (const t of topics) {
-      const candidate = dailyPool.filter((it) => it.topic === t && !daily.includes(it))[0];
+      const candidate = dailyPool.filter((it) => it.topic === t && !dailyOrder.includes(it))[0];
       if (candidate) {
-        daily.push(candidate);
+        dailyOrder.push(candidate);
         progressed = true;
-        if (daily.length >= 5) break;
       }
     }
     if (!progressed) break;
   }
+  const daily = applyWorldQuota(dailyOrder, 5, WORLD_MAX_DOMESTIC_DAILY);
   const weekly = merged.filter((it) => it.weekly).sort(byTime).slice(0, 9);
-  const all = merged.sort(byTime).slice(0, 40);
+  const all = applyWorldQuota(merged.sort(byTime), 40, WORLD_MAX_DOMESTIC_ALL);
   if (all.length === 0) {
     await noteRefreshFailure(ctx, "我关注的世界");
     const stale = await readCacheStale<{ daily: WorldItem[]; weekly: WorldItem[]; all: WorldItem[] }>(ctx, "world:all:v3");
@@ -6789,6 +6983,8 @@ const worldItemSchema = feedItemSchema.extend({
   topic: z.string(),
   weekly: z.boolean(),
   relevance: z.string(),
+  /** 国内/国际标识（2026-11-27）：classifyWorldScope 的确定性判定结果。 */
+  scope: z.enum(["domestic", "international"]),
 });
 
 // ---------------------------------------------------------------------------
@@ -7147,6 +7343,7 @@ function worldRelevanceFor(it: WorldItem): string {
 function normalizeWorld(it: WorldItem): z.infer<typeof worldItemSchema> {
   return {
     ...it,
+    scope: it.scope ?? classifyWorldScope(it),
     title: decodeEntities(it.title),
     summary: it.summary ? decodeEntities(it.summary) : it.summary,
     relevance: worldRelevanceFor(it),
@@ -8077,7 +8274,7 @@ export const Actions = {
 
   getMyWorld: defineAction({
     description:
-      "Returns 我关注的世界： daily picks (at most 5, same event merged, across 国内经济/国外经济/政治/科技/网络安全/出行安全/地区冲突）, weekly picks （书籍/历史/语言学习）, and the full topic-browsable list. Local festival/traffic advisories written for one unrelated locality's residents (e.g. 大理州庆交通安全出行提示） are excluded at ingest and on every read; nationwide notices and travel-safety items about 江西 or a study destination （美国/新西兰/新加坡/越南/日本/韩国/爱尔兰/英国） stay. Each item's 「和我有什么关系」 line is derived deterministically from the item's OWN title/summary (2026-11-22), never from a per-topic template: a disaster/accident report (e.g. the Indonesia candy-factory fire) is labelled a safety event with no visa claim, and the visa/study/travel wording is used only when the item's own text involves visas, study abroad or travel. Titles are HTML-entity-decoded (&#163; → £, &#183; → ·) at ingest and on every read, and a Google News multi-outlet headline list is never stored as a summary — the item is title-only instead of splicing several outlets' reports into one.",
+      "Returns 我关注的世界： daily picks (at most 5, same event merged, across 经济/政治/科技/网络安全/地区冲突）, weekly picks （书籍/历史/语言学习）, and the full topic-browsable list. Local festival/traffic advisories written for one unrelated locality's residents (e.g. 大理州庆交通安全出行提示） are excluded at ingest and on every read; nationwide notices and travel-safety items about 江西 or a study destination （美国/新西兰/新加坡/越南/日本/韩国/爱尔兰/英国） stay. Domestic/international mix (2026-11-27, deterministic, no model): every item carries scope (domestic/international, from source + title/summary keywords); a non-weekly domestic item only enters when it passes the national-major gate (central-body macro policy, national GDP/jobs/trade trend, or a study-abroad/exit item — general domestic news, local livelihood and social items are filtered); daily holds at most 1 domestic item in 5 and the full list at most 8 domestic in 40 (0 domestic allowed), enforced at ingest and again on every read so a stale cache can never serve an out-of-quota list. Each item's 「和我有什么关系」 line is derived deterministically from the item's OWN title/summary (2026-11-22), never from a per-topic template: a disaster/accident report (e.g. the Indonesia candy-factory fire) is labelled a safety event with no visa claim, and the visa/study/travel wording is used only when the item's own text involves visas, study abroad or travel. Titles are HTML-entity-decoded (&#163; → £, &#183; → ·) at ingest and on every read, and a Google News multi-outlet headline list is never stored as a summary — the item is title-only instead of splicing several outlets' reports into one.",
     request: z.object({ force: z.boolean().default(false) }),
     response: z.object({
       asOf: z.string(),
@@ -8090,12 +8287,16 @@ export const Actions = {
       // Read-time application of the local festival/traffic rule, so a
       // payload cached before the rule existed is filtered on every
       // response too (ingest applies the same rule to fresh pools).
+      // Same for the domestic gate + hard quota (2026-11-27): a payload
+      // cached before the ratio round is corrected on every read.
       const keep = (it: WorldItem) => !isLocalFestivalTrafficNotice(it);
+      const scoped = (list: WorldItem[]) =>
+        list.filter(keep).map(withWorldScope).filter((it) => !isWorldDomesticBlocked(it));
       return {
         asOf: r.asOf,
-        daily: r.daily.filter(keep).map(normalizeWorld),
-        weekly: r.weekly.filter(keep).map(normalizeWorld),
-        all: r.all.filter(keep).map(normalizeWorld),
+        daily: applyWorldQuota(scoped(r.daily), 5, WORLD_MAX_DOMESTIC_DAILY).map(normalizeWorld),
+        weekly: scoped(r.weekly).map(normalizeWorld),
+        all: applyWorldQuota(scoped(r.all), 40, WORLD_MAX_DOMESTIC_ALL).map(normalizeWorld),
       };
     },
   }),
