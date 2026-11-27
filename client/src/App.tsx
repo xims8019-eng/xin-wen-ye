@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type ApiResponse } from "./api";
 
@@ -12,6 +12,55 @@ type WorldItem = ApiResponse<typeof api, "getMyWorld">["daily"][number];
 type DigestItem = ApiResponse<typeof api, "getDailyDigest">["items"][number];
 type HotSource = ApiResponse<typeof api, "getHotLists">["sources"][number];
 type FitnessItem = ApiResponse<typeof api, "getFitness">["items"][number];
+
+/** Key under which the last "mark all as seen" time is kept (localStorage only, per device). */
+const LAST_SEEN_KEY = "xinwenye_last_seen_at";
+
+/** Last-seen time for NEW badges; null until the first visit is recorded. */
+const LastSeenContext = createContext<string | null>(null);
+/** Sections report whether they currently show any NEW item, keyed by section id. */
+const NewReportContext = createContext<(section: string, has: boolean) => void>(() => {});
+/** Lets a DismissButton anywhere report the just-dismissed item for the undo toast. */
+const DismissNotifyContext = createContext<(item: { itemKey: string; title: string }) => void>(() => {});
+
+/** Stable identity for dismissing: the URL, or title::source for linkless items. */
+function itemKeyFor(item: { url?: string | null; title: string; source?: string }): string {
+  return item.url ? item.url : `${item.title}::${item.source ?? ""}`;
+}
+
+/** NEW when published after the last "mark all as seen" time. */
+function isNewItem(publishedAt: string | null | undefined, lastSeenAt: string | null): boolean {
+  if (!publishedAt || !lastSeenAt) return false;
+  const t = new Date(publishedAt).getTime();
+  const seen = new Date(lastSeenAt).getTime();
+  return !Number.isNaN(t) && !Number.isNaN(seen) && t > seen;
+}
+
+/** Restrained NEW tag next to a title (outline pill, smaller than the filled badges). */
+function NewBadge() {
+  return (
+    <span className="rounded-full border border-[var(--accent)] px-1.5 py-px text-[11px] font-medium leading-tight text-[var(--accent)]">
+      NEW
+    </span>
+  );
+}
+
+/** Shared dismissed-items query, as a Set of keys for render-time filtering. */
+function useDismissedKeys(): Set<string> {
+  const q = useQuery({ queryKey: ["dismissed"], queryFn: () => api.getDismissed({}) });
+  return useMemo(() => new Set((q.data?.items ?? []).map((it) => it.itemKey)), [q.data]);
+}
+
+/** A section reports whether any of its (already dismiss-filtered) items is NEW. */
+function useReportHasNew(section: string, items: Array<{ publishedAt: string | null }>) {
+  const lastSeenAt = useContext(LastSeenContext);
+  const reportHasNew = useContext(NewReportContext);
+  const hasNew = items.some((it) => isNewItem(it.publishedAt, lastSeenAt));
+  useEffect(() => {
+    reportHasNew(section, hasNew);
+    return () => reportHasNew(section, false);
+  }, [section, hasNew, reportHasNew]);
+}
 
 const OVERSEAS_COUNTRIES = ["美国", "新西兰", "新加坡", "越南", "日本", "韩国", "爱尔兰", "英国"];
 const STUDY_STAGES: Array<{ id: string; label: string }> = [
@@ -140,6 +189,42 @@ function BookmarkButton({ item }: { item: NewsItem }) {
       className={`shrink-0 px-2 text-lg leading-none ${saved ? "text-[var(--accent)]" : "text-[var(--dim)]"}`}
     >
       {saved ? "★" : "☆"}
+    </button>
+  );
+}
+
+/** Restrained "ignore" button: hides the item everywhere at once (optimistic,
+ * with rollback on failure) and reports it for the undo toast. */
+function DismissButton({ item }: { item: { url?: string | null; title: string; source?: string } }) {
+  const queryClient = useQueryClient();
+  const notifyDismissed = useContext(DismissNotifyContext);
+  const itemKey = itemKeyFor(item);
+  const dismiss = useMutation({
+    mutationFn: async () => await api.dismissItem({ itemKey, title: item.title }),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["dismissed"] });
+      const prev = queryClient.getQueryData<ApiResponse<typeof api, "getDismissed">>(["dismissed"]);
+      queryClient.setQueryData<ApiResponse<typeof api, "getDismissed">>(["dismissed"], {
+        items: [...(prev?.items ?? []), { itemKey, title: item.title, dismissedAt: new Date().toISOString() }],
+      });
+      return { prev };
+    },
+    onError: (_err, _vars, context) => {
+      if (context) queryClient.setQueryData(["dismissed"], context.prev);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["dismissed"] });
+      notifyDismissed({ itemKey, title: item.title });
+    },
+  });
+  return (
+    <button
+      type="button"
+      aria-label={`忽略：${item.title}`}
+      onClick={() => dismiss.mutate()}
+      className="shrink-0 px-1 text-sm leading-none text-[var(--dim)]"
+    >
+      ✕
     </button>
   );
 }
@@ -283,6 +368,8 @@ function ItemDetail({ item }: { item: NewsItem }) {
 
 function ArticleRow({ item, relevance }: { item: NewsItem; relevance?: string }) {
   const [open, setOpen] = useState(false);
+  const lastSeenAt = useContext(LastSeenContext);
+  const isNew = isNewItem(item.publishedAt, lastSeenAt);
   return (
     <li className="border-b border-[var(--border)] py-3">
       <div className="flex items-start gap-1">
@@ -293,7 +380,9 @@ function ArticleRow({ item, relevance }: { item: NewsItem; relevance?: string })
           aria-label={`${open ? "收起" : "展开"}：${item.title}`}
           className="min-w-0 flex-1 text-left"
         >
-          <p className="font-headline text-[17px] font-bold leading-snug text-[var(--text)]">{item.title}</p>
+          <p className="font-headline text-[17px] font-bold leading-snug text-[var(--text)]">
+            {item.title} {isNew ? <NewBadge /> : null}
+          </p>
           {relevance ? (
             <p className="mt-1 text-sm leading-relaxed text-[var(--dim)]">
               <span className="font-medium text-[var(--text)]">和我有什么关系：</span>
@@ -315,6 +404,7 @@ function ArticleRow({ item, relevance }: { item: NewsItem; relevance?: string })
           </p>
         </button>
         {item.url ? <BookmarkButton item={item} /> : null}
+        <DismissButton item={item} />
       </div>
       {open ? <ItemDetail item={item} /> : null}
     </li>
@@ -323,6 +413,8 @@ function ArticleRow({ item, relevance }: { item: NewsItem; relevance?: string })
 
 function LearningRow({ item }: { item: LearningItem }) {
   const [open, setOpen] = useState(false);
+  const lastSeenAt = useContext(LastSeenContext);
+  const isNew = isNewItem(item.publishedAt, lastSeenAt);
   const catLabel = LEARNING_CATEGORIES.find((c) => c.id === item.category)?.label ?? "";
   const left = item.deadline ? daysUntil(item.deadline) : null;
   const urgent = left !== null && left >= 0 && left <= 7;
@@ -336,7 +428,9 @@ function LearningRow({ item }: { item: LearningItem }) {
           aria-label={`${open ? "收起" : "展开"}：${item.title}`}
           className="min-w-0 flex-1 text-left"
         >
-          <p className="font-headline text-[17px] font-bold leading-snug text-[var(--text)]">{item.title}</p>
+          <p className="font-headline text-[17px] font-bold leading-snug text-[var(--text)]">
+            {item.title} {isNew ? <NewBadge /> : null}
+          </p>
           <p className="mt-1 text-sm leading-relaxed text-[var(--dim)]">
             <span className="font-medium text-[var(--text)]">和我有什么关系：</span>
             {item.relevance}
@@ -409,6 +503,7 @@ function LearningRow({ item }: { item: LearningItem }) {
             summary: item.summaryZh,
           }}
         />
+        <DismissButton item={item} />
       </div>
       {open ? (
         <div className="mt-2 rounded-[var(--radius)] bg-[var(--space-surface-alt)] p-3">
@@ -588,7 +683,11 @@ function LearningSection({ onGoLearning }: { onGoLearning: () => void }) {
     onError: () => {},
   });
   const [topic, setTopic] = useState<LearningTopic>("all");
-  const allItems = (learning.data?.items ?? []).filter((it) => matchesTopic(it, topic));
+  const dismissedKeys = useDismissedKeys();
+  const allItems = (learning.data?.items ?? [])
+    .filter((it) => matchesTopic(it, topic))
+    .filter((it) => !dismissedKeys.has(itemKeyFor(it)));
+  useReportHasNew("learning", allItems);
   const anytime = allItems.filter((it) => it.group === "anytime");
   const upcoming = allItems.filter((it) => it.group === "upcoming");
   const others = allItems.filter((it) => it.group !== "anytime" && it.group !== "upcoming");
@@ -621,7 +720,7 @@ function LearningSection({ onGoLearning }: { onGoLearning: () => void }) {
 
       {topic === "all" ? (
         <div className="mt-4">
-          <DeadlineAlerts deadlines={learning.data?.deadlines ?? []} />
+          <DeadlineAlerts deadlines={(learning.data?.deadlines ?? []).filter((it) => !dismissedKeys.has(itemKeyFor(it)))} />
         </div>
       ) : null}
 
@@ -687,7 +786,11 @@ function LearningView() {
     onError: () => {},
   });
   const [topic, setTopic] = useState<LearningTopic>("all");
-  const items = (learning.data?.items ?? []).filter((it) => matchesTopic(it, topic));
+  const dismissedKeys = useDismissedKeys();
+  const items = (learning.data?.items ?? [])
+    .filter((it) => matchesTopic(it, topic))
+    .filter((it) => !dismissedKeys.has(itemKeyFor(it)));
+  useReportHasNew("learning", items);
   const anytime = items.filter((it) => it.group === "anytime");
   const upcoming = items.filter((it) => it.group === "upcoming");
   const others = items.filter((it) => it.group !== "anytime" && it.group !== "upcoming");
@@ -718,7 +821,7 @@ function LearningView() {
 
       {topic === "all" ? (
         <div className="mt-4">
-          <DeadlineAlerts deadlines={learning.data?.deadlines ?? []} />
+          <DeadlineAlerts deadlines={(learning.data?.deadlines ?? []).filter((it) => !dismissedKeys.has(itemKeyFor(it)))} />
         </div>
       ) : null}
 
@@ -917,16 +1020,21 @@ function FitnessView() {
 
 function JiangxiRow({ item }: { item: JiangxiItem }) {
   const [open, setOpen] = useState(false);
+  const lastSeenAt = useContext(LastSeenContext);
+  const isNew = isNewItem(item.publishedAt, lastSeenAt);
   return (
     <li className="border-b border-[var(--border)] py-3">
+      <div className="flex items-start gap-1">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-label={`${open ? "收起" : "展开"}：${item.title}`}
-        className="block w-full text-left"
+        className="min-w-0 flex-1 text-left"
       >
-        <p className="font-headline text-[17px] font-bold leading-snug text-[var(--text)]">{item.title}</p>
+        <p className="font-headline text-[17px] font-bold leading-snug text-[var(--text)]">
+          {item.title} {isNew ? <NewBadge /> : null}
+        </p>
         {item.summaryZh ? <p className="mt-1 text-sm leading-relaxed text-[var(--dim)]">{item.summaryZh}</p> : null}
         <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-[var(--dim)]">
           <span className="rounded-full border border-[var(--border)] px-2 py-0.5 font-medium text-[var(--text)]">{item.tag}</span>
@@ -969,6 +1077,8 @@ function JiangxiRow({ item }: { item: JiangxiItem }) {
           {item.actionNeeded}
         </p>
       </button>
+      <DismissButton item={item} />
+      </div>
       {open ? (
         <div className="mt-2 rounded-[var(--radius)] bg-[var(--space-surface-alt)] p-3">
           {item.titleOnly ? (
@@ -1009,7 +1119,10 @@ function JiangxiSection() {
     },
     onError: () => {},
   });
-  const items = q.data?.items ?? [];
+  const dismissedKeys = useDismissedKeys();
+  const items = (q.data?.items ?? []).filter((it) => !dismissedKeys.has(itemKeyFor(it)));
+  const archive = (q.data?.archive ?? []).filter((it) => !dismissedKeys.has(itemKeyFor(it)));
+  useReportHasNew("jiangxi", [...items, ...archive]);
   const current = items.filter((it) => !it.isReference);
   const reference = items.filter((it) => it.isReference).slice(0, 8);
   return (
@@ -1080,14 +1193,14 @@ function JiangxiSection() {
           ) : null}
         </>
       )}
-      {(q.data?.archive ?? []).length > 0 ? (
+      {archive.length > 0 ? (
         <div className="mt-5">
           <h4 className="font-headline text-base font-bold text-[var(--text)]">往年官方备考资料</h4>
           <p className="mt-1 text-xs leading-relaxed text-[var(--dim)]">
             官方真题：截至 2026 年 11 月 23 日，暂未在这两个官网查到可免费下载的官方真题（已查考试院专升本栏目站内搜索、教育厅站内搜索与 5 条官方通知全文，找到的都是第三方回忆卷）。大纲样题同样没有：《考试说明》PDF 全文检索「例题」「样题」「示例」「题型示例」均为 0 命中。备考以《考试说明》的考试范围、题型与参考书目为准。
           </p>
           <ul>
-            {(q.data?.archive ?? []).map((item) => (
+            {archive.map((item) => (
               <JiangxiRow key={item.url} item={item} />
             ))}
           </ul>
@@ -1097,8 +1210,10 @@ function JiangxiSection() {
   );
 }
 
-function OverseasRow({ item }: { item: OverseasItem }) {
+function OverseasRow({ item, hideDismiss = false }: { item: OverseasItem; hideDismiss?: boolean }) {
   const [open, setOpen] = useState(false);
+  const lastSeenAt = useContext(LastSeenContext);
+  const isNew = isNewItem(item.publishedAt, lastSeenAt);
   // Yale D/S card only (the one item carrying decisionDateLabel): its
   // effectiveWhen repeats the full body text verbatim, so in the expanded
   // view the 「政策生效」 and 「何时生效」 lines are not rendered — the
@@ -1114,14 +1229,17 @@ function OverseasRow({ item }: { item: OverseasItem }) {
   const effParts = item.kind === "policy" ? (item.effectiveParts ?? []) : [];
   return (
     <li className="border-b border-[var(--border)] py-3">
+      <div className="flex items-start gap-1">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-label={`${open ? "收起" : "展开"}：${item.title}`}
-        className="block w-full text-left"
+        className="min-w-0 flex-1 text-left"
       >
-        <p className="font-headline text-[17px] font-bold leading-snug text-[var(--text)]">{item.title}</p>
+        <p className="font-headline text-[17px] font-bold leading-snug text-[var(--text)]">
+          {item.title} {isNew ? <NewBadge /> : null}
+        </p>
         <p className="mt-1 text-sm leading-relaxed text-[var(--dim)]">
           <span className="font-medium text-[var(--text)]">和我有什么关系：</span>
           {item.relevance}
@@ -1199,6 +1317,8 @@ function OverseasRow({ item }: { item: OverseasItem }) {
           )}
         </dl>
       </button>
+      {hideDismiss ? null : <DismissButton item={item} />}
+      </div>
       {open ? (
         <div className="mt-2 rounded-[var(--radius)] bg-[var(--space-surface-alt)] p-3">
           {item.titleOnly ? (
@@ -1291,7 +1411,11 @@ function OverseasCategorySection({ category }: { category: "study" | "work_visa"
   });
   const isStudy = category === "study";
   const stages = isStudy ? STUDY_STAGES : WORK_STAGES;
-  const items = (q.data?.items ?? []).filter((it) => it.category === category);
+  const dismissedKeys = useDismissedKeys();
+  const items = (q.data?.items ?? [])
+    .filter((it) => it.category === category)
+    .filter((it) => !dismissedKeys.has(itemKeyFor(it)));
+  useReportHasNew(isStudy ? "overseas-study" : "overseas-work", items);
   // Fixed visa zone lives inside the work/visa category; applicability was
   // already checked server-side before pinning.
   const visaItems = isStudy ? [] : items.filter((it) => it.visa && it.pinned);
@@ -1373,7 +1497,7 @@ function OverseasCategorySection({ category }: { category: "study" | "work_visa"
               </p>
               <ul>
                 {visaItems.map((item) => (
-                  <OverseasRow key={item.url} item={item} />
+                  <OverseasRow key={item.url} item={item} hideDismiss />
                 ))}
               </ul>
             </div>
@@ -1405,7 +1529,10 @@ function OverseasCategorySection({ category }: { category: "study" | "work_visa"
 
 function RecentApplicableSection() {
   const q = useQuery({ queryKey: ["digest"], queryFn: () => api.getDailyDigest({ force: false }) });
-  const items: DigestItem[] = q.data?.items ?? [];
+  const dismissedKeys = useDismissedKeys();
+  const lastSeenAt = useContext(LastSeenContext);
+  const items: DigestItem[] = (q.data?.items ?? []).filter((it) => !dismissedKeys.has(itemKeyFor(it)));
+  useReportHasNew("digest", items);
   return (
     <section aria-label="近期可申请" className="mt-10 border-t-2 border-[var(--text)] pt-5">
       <h3 className="font-headline text-xl font-black text-[var(--text)]">近期可申请</h3>
@@ -1418,9 +1545,12 @@ function RecentApplicableSection() {
         <ul>
           {items.map((item) => (
             <li key={item.url} className="border-b border-[var(--border)] py-3">
-              <a href={item.url} target="_blank" rel="noreferrer" className="font-headline text-[17px] font-bold leading-snug text-[var(--text)] underline-offset-2 hover:underline">
-                {item.title}
-              </a>
+              <div className="flex items-start gap-1">
+                <a href={item.url} target="_blank" rel="noreferrer" className="min-w-0 flex-1 font-headline text-[17px] font-bold leading-snug text-[var(--text)] underline-offset-2 hover:underline">
+                  {item.title} {isNewItem(item.publishedAt, lastSeenAt) ? <NewBadge /> : null}
+                </a>
+                <DismissButton item={item} />
+              </div>
               <p className="mt-1 text-sm leading-relaxed text-[var(--dim)]">
                 <span className="font-medium text-[var(--text)]">和我有什么关系：</span>
                 {item.relevance}
@@ -1512,11 +1642,14 @@ function WorldSection() {
     },
     onError: () => {},
   });
-  const all = q.data?.all ?? [];
+  const dismissedKeys = useDismissedKeys();
+  const all = (q.data?.all ?? []).filter((it) => !dismissedKeys.has(itemKeyFor(it)));
+  const daily = (q.data?.daily ?? []).filter((it) => !dismissedKeys.has(itemKeyFor(it)));
   const topics = ["今日精选", ...Array.from(new Set(all.map((it) => it.topic)))];
   const list: WorldItem[] =
-    topic === "今日精选" ? (q.data?.daily ?? []) : all.filter((it) => it.topic === topic && !it.weekly).slice(0, 10);
-  const weekly = q.data?.weekly ?? [];
+    topic === "今日精选" ? daily : all.filter((it) => it.topic === topic && !it.weekly).slice(0, 10);
+  const weekly = (q.data?.weekly ?? []).filter((it) => !dismissedKeys.has(itemKeyFor(it)));
+  useReportHasNew("world", [...list, ...weekly]);
   return (
     <section aria-label="国内外要闻" className="mt-10 border-t-2 border-[var(--text)] pt-5">
       <div className="flex items-center justify-between gap-3">
@@ -1619,10 +1752,12 @@ type CategoryId = (typeof CATEGORY_FALLBACK)[number]["id"];
 function NewsView() {
   const [category, setCategory] = useState<CategoryId>("top");
   const queryClient = useQueryClient();
+  const dismissedKeys = useDismissedKeys();
   const news = useQuery({
     queryKey: ["news", category],
     queryFn: () => api.getCategoryNews({ category, force: false }),
   });
+  useReportHasNew("news", (news.data?.items ?? []).filter((it) => !dismissedKeys.has(itemKeyFor(it))));
   const refresh = useMutation({
     mutationFn: async () => await api.getCategoryNews({ category, force: true }),
     onSuccess: (data) => {
@@ -1672,9 +1807,11 @@ function NewsView() {
         <p className="py-8 text-sm text-[var(--dim)]">这个分类暂时没取到新闻，点刷新再试。</p>
       ) : (
         <ul>
-          {news.data.items.map((item, i) => (
-            <ArticleRow key={`${item.url}-${i}`} item={item} />
-          ))}
+          {news.data.items
+            .filter((item) => !dismissedKeys.has(itemKeyFor(item)))
+            .map((item, i) => (
+              <ArticleRow key={`${item.url}-${i}`} item={item} />
+            ))}
         </ul>
       )}
     </section>
@@ -1740,11 +1877,15 @@ function FeedsView() {
   }
 
   const followedCount = myFeed.data?.followedCount ?? 0;
-  const sortedFeedItems = [...(myFeed.data?.items ?? [])].sort((a, b) => {
-    const ta = a.publishedAt ? new Date(a.publishedAt).getTime() : 0;
-    const tb = b.publishedAt ? new Date(b.publishedAt).getTime() : 0;
-    return tb - ta;
-  });
+  const dismissedKeys = useDismissedKeys();
+  const sortedFeedItems = [...(myFeed.data?.items ?? [])]
+    .filter((it) => !dismissedKeys.has(itemKeyFor(it)))
+    .sort((a, b) => {
+      const ta = a.publishedAt ? new Date(a.publishedAt).getTime() : 0;
+      const tb = b.publishedAt ? new Date(b.publishedAt).getTime() : 0;
+      return tb - ta;
+    });
+  useReportHasNew("feeds", sortedFeedItems);
 
   return (
     <section>
@@ -1878,10 +2019,77 @@ function FeedsView() {
   );
 }
 
+/** Collapsed-by-default list of dismissed items with per-item restore + clear-all. */
+function DismissedSection() {
+  const [open, setOpen] = useState(false);
+  const queryClient = useQueryClient();
+  const q = useQuery({ queryKey: ["dismissed"], queryFn: () => api.getDismissed({}) });
+  const items = q.data?.items ?? [];
+  const restore = useMutation({
+    mutationFn: async (itemKey: string) => await api.restoreDismissed({ itemKey }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["dismissed"] }),
+    onError: () => {},
+  });
+  const clear = useMutation({
+    mutationFn: async () => await api.clearDismissed({}),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["dismissed"] }),
+    onError: () => {},
+  });
+  return (
+    <section aria-label="已忽略" className="mt-10 border-t-2 border-[var(--text)] pt-5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between text-left"
+      >
+        <h3 className="font-headline text-xl font-black text-[var(--text)]">已忽略（{items.length}）</h3>
+        <span className="text-sm font-medium text-[var(--accent)]">{open ? "收起 ▴" : "展开 ▾"}</span>
+      </button>
+      {open ? (
+        q.isPending ? (
+          <p className="py-6 text-sm text-[var(--dim)]">正在取已忽略的条目…</p>
+        ) : items.length === 0 ? (
+          <p className="py-6 text-sm text-[var(--dim)]">还没有忽略的条目，点文章右边的 ✕ 可以忽略一条。</p>
+        ) : (
+          <>
+            <ul>
+              {items.map((it) => (
+                <li key={it.itemKey} className="flex items-center gap-3 border-b border-[var(--border)] py-3">
+                  <p className="min-w-0 flex-1 text-[15px] font-medium leading-snug text-[var(--text)]">{it.title}</p>
+                  <button
+                    type="button"
+                    aria-label={`恢复：${it.title}`}
+                    onClick={() => restore.mutate(it.itemKey)}
+                    disabled={restore.isPending}
+                    className="shrink-0 rounded-full border border-[var(--border)] px-3 text-sm text-[var(--text)] disabled:opacity-50"
+                  >
+                    恢复
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              onClick={() => clear.mutate()}
+              disabled={clear.isPending}
+              className="mt-3 text-sm text-[var(--dim)] underline underline-offset-2 disabled:opacity-50"
+            >
+              清空（全部恢复）
+            </button>
+          </>
+        )
+      ) : null}
+    </section>
+  );
+}
+
 function SavedView() {
   const bookmarks = useQuery({ queryKey: ["bookmarks"], queryFn: () => api.getBookmarks({}) });
-  const list = bookmarks.data?.bookmarks ?? [];
+  const dismissedKeys = useDismissedKeys();
+  const list = (bookmarks.data?.bookmarks ?? []).filter((b) => !dismissedKeys.has(itemKeyFor(b)));
   return (
+    <>
     <section>
       {bookmarks.isPending ? (
         <p className="py-6 text-sm text-[var(--dim)]">正在取收藏…</p>
@@ -1900,6 +2108,8 @@ function SavedView() {
         </ul>
       )}
     </section>
+    <DismissedSection />
+    </>
   );
 }
 
@@ -1915,6 +2125,68 @@ const TABS: Array<{ id: Tab; label: string }> = [
 export function App() {
   const [tab, setTab] = useState<Tab>("home");
   const queryClient = useQueryClient();
+  // NEW badges: the last "mark all as seen" time, kept in localStorage only
+  // (per device). First visit records now and shows no NEW badges.
+  const [lastSeenAt, setLastSeenAt] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(LAST_SEEN_KEY);
+    } catch {
+      return null;
+    }
+  });
+  useEffect(() => {
+    if (lastSeenAt === null) {
+      const now = new Date().toISOString();
+      try {
+        localStorage.setItem(LAST_SEEN_KEY, now);
+      } catch {
+        // Private mode etc: NEW badges just stay off.
+      }
+      setLastSeenAt(now);
+    }
+    // Only on mount; never overwritten during this session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Per-section NEW reports feed the header "全部标为已看" button.
+  const [newBySection, setNewBySection] = useState<Record<string, boolean>>({});
+  const reportHasNew = useCallback((section: string, has: boolean) => {
+    setNewBySection((prev) => (prev[section] === has ? prev : { ...prev, [section]: has }));
+  }, []);
+  const hasAnyNew = Object.values(newBySection).some(Boolean);
+  const markAllSeen = useCallback(() => {
+    const now = new Date().toISOString();
+    try {
+      localStorage.setItem(LAST_SEEN_KEY, now);
+    } catch {
+      // ignore
+    }
+    setLastSeenAt(now);
+  }, []);
+  // Dismiss undo toast (3s, timer cleared on unmount).
+  const [dismissToast, setDismissToast] = useState<{ itemKey: string; title: string } | null>(null);
+  const dismissToastTimer = useRef<number | null>(null);
+  const notifyDismissed = useCallback((item: { itemKey: string; title: string }) => {
+    if (dismissToastTimer.current) window.clearTimeout(dismissToastTimer.current);
+    setDismissToast(item);
+    dismissToastTimer.current = window.setTimeout(() => setDismissToast(null), 3000);
+  }, []);
+  useEffect(
+    () => () => {
+      if (dismissToastTimer.current) window.clearTimeout(dismissToastTimer.current);
+    },
+    [],
+  );
+  async function undoDismiss() {
+    if (!dismissToast) return;
+    const itemKey = dismissToast.itemKey;
+    setDismissToast(null);
+    try {
+      await api.restoreDismissed({ itemKey });
+      queryClient.invalidateQueries({ queryKey: ["dismissed"] });
+    } catch {
+      // Leave it dismissed; the entry stays under 已忽略.
+    }
+  }
   const status = useQuery({ queryKey: ["status"], queryFn: () => api.getStatus({}) });
   const refreshAll = useMutation({
     mutationFn: async () => await api.refreshAll({ source: "manual" }),
@@ -1955,6 +2227,9 @@ export function App() {
   const lastError = status.data?.lastError ?? null;
 
   return (
+    <LastSeenContext.Provider value={lastSeenAt}>
+    <NewReportContext.Provider value={reportHasNew}>
+    <DismissNotifyContext.Provider value={notifyDismissed}>
     <div className="min-h-screen bg-[var(--bg)]">
       <header className="sticky top-0 z-10 border-b border-[var(--border)] bg-[var(--bg)] pt-safe">
         <div className="mx-auto max-w-6xl px-4">
@@ -1983,6 +2258,16 @@ export function App() {
             >
               {refreshAll.isPending ? "刷新中…" : "刷新全部"}
             </button>
+            {hasAnyNew ? (
+              <button
+                type="button"
+                aria-label="全部标为已看"
+                onClick={markAllSeen}
+                className="rounded-full border border-[var(--border)] px-2.5 text-xs text-[var(--text)]"
+              >
+                全部标为已看
+              </button>
+            ) : null}
           </div>
           <p className="mt-0.5 text-center text-[11px] text-[var(--dim)]">
             定时刷新：{scheduleLabel}；最近一次定时任务：{cronRunLabel}
@@ -2061,6 +2346,22 @@ export function App() {
         {tab === "feeds" ? <div className="mx-auto max-w-3xl"><FeedsView /></div> : null}
         {tab === "saved" ? <div className="mx-auto max-w-3xl"><SavedView /></div> : null}
       </main>
+      {dismissToast ? (
+        <div className="fixed inset-x-0 bottom-4 z-20 flex justify-center px-4" role="status">
+          <div className="flex max-w-lg items-center gap-3 rounded-full bg-[var(--text)] px-4 py-2 text-sm text-[var(--bg)] shadow-lg">
+            <span className="min-w-0 flex-1 truncate">已忽略「{dismissToast.title}」</span>
+            <button type="button" onClick={undoDismiss} className="shrink-0 font-semibold underline underline-offset-2">
+              撤销
+            </button>
+            <button type="button" aria-label="关闭提示" onClick={() => setDismissToast(null)} className="shrink-0">
+              ✕
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
+    </DismissNotifyContext.Provider>
+    </NewReportContext.Provider>
+    </LastSeenContext.Provider>
   );
 }

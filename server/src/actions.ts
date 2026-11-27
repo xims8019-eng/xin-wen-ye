@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { asc, eq } from "drizzle-orm";
+import { asc, desc, eq, sql } from "drizzle-orm";
 import * as schema from "./schema.js";
 import type { Ctx } from "./ctx.js";
 import { completeInference } from "./llm.js";
@@ -7796,6 +7796,91 @@ export const Actions = {
       });
       ctx.invalidateQueries();
       return { saved: true };
+    },
+  }),
+
+  // Dismissed ("ignored") items are hidden everywhere on the client and
+  // synced across devices via this table. Each handler first runs an
+  // idempotent lazy CREATE TABLE so the feature works even if the
+  // drizzle/0003 migration was never applied to the live database.
+  getDismissed: defineAction({
+    description: "Lists the user's dismissed (ignored) items, newest dismissed first.",
+    request: z.object({}),
+    response: z.object({
+      items: z.array(
+        z.object({
+          itemKey: z.string(),
+          title: z.string(),
+          dismissedAt: z.string(),
+        }),
+      ),
+    }),
+    async handler(ctx) {
+      const db = ctx.db;
+      await db.run(
+        sql`CREATE TABLE IF NOT EXISTS dismissed_items (item_key TEXT PRIMARY KEY, title TEXT NOT NULL, dismissed_at TEXT NOT NULL)`,
+      );
+      const rows = await db.select().from(schema.dismissedItems).orderBy(desc(schema.dismissedItems.dismissedAt));
+      return {
+        items: rows.map((r) => ({ itemKey: r.itemKey, title: r.title, dismissedAt: r.dismissedAt })),
+      };
+    },
+  }),
+
+  dismissItem: defineAction({
+    description: "Hides an item everywhere (matched by its key: URL, or title::source for linkless items).",
+    request: z.object({
+      itemKey: z.string().min(1).max(1000),
+      title: z.string().min(1).max(300),
+    }),
+    response: z.object({ ok: z.boolean() }),
+    async handler(ctx, args) {
+      const db = ctx.db;
+      await db.run(
+        sql`CREATE TABLE IF NOT EXISTS dismissed_items (item_key TEXT PRIMARY KEY, title TEXT NOT NULL, dismissed_at TEXT NOT NULL)`,
+      );
+      await db
+        .insert(schema.dismissedItems)
+        .values({ itemKey: args.itemKey, title: args.title, dismissedAt: new Date().toISOString() })
+        .onConflictDoUpdate({
+          target: schema.dismissedItems.itemKey,
+          set: { title: args.title, dismissedAt: new Date().toISOString() },
+        });
+      ctx.invalidateQueries();
+      return { ok: true };
+    },
+  }),
+
+  restoreDismissed: defineAction({
+    description: "Restores one dismissed item so it shows again.",
+    request: z.object({
+      itemKey: z.string().min(1).max(1000),
+    }),
+    response: z.object({ ok: z.boolean() }),
+    async handler(ctx, args) {
+      const db = ctx.db;
+      await db.run(
+        sql`CREATE TABLE IF NOT EXISTS dismissed_items (item_key TEXT PRIMARY KEY, title TEXT NOT NULL, dismissed_at TEXT NOT NULL)`,
+      );
+      await db.delete(schema.dismissedItems).where(eq(schema.dismissedItems.itemKey, args.itemKey));
+      ctx.invalidateQueries();
+      return { ok: true };
+    },
+  }),
+
+  clearDismissed: defineAction({
+    description: "Restores all dismissed items so they show again.",
+    request: z.object({}),
+    response: z.object({ ok: z.boolean(), cleared: z.number() }),
+    async handler(ctx) {
+      const db = ctx.db;
+      await db.run(
+        sql`CREATE TABLE IF NOT EXISTS dismissed_items (item_key TEXT PRIMARY KEY, title TEXT NOT NULL, dismissed_at TEXT NOT NULL)`,
+      );
+      const rows = await db.select({ itemKey: schema.dismissedItems.itemKey }).from(schema.dismissedItems);
+      await db.delete(schema.dismissedItems);
+      ctx.invalidateQueries();
+      return { ok: true, cleared: rows.length };
     },
   }),
 

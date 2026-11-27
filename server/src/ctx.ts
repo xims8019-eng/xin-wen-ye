@@ -36,7 +36,7 @@ export interface Ctx {
   invalidateQueries: () => void;
 }
 
-// Same three tables as drizzle/0002_news_tables_replace_entries.sql,
+// Same four tables as drizzle/0003_dismissed_items.sql,
 // inlined so the serverless function never has to read SQL files at runtime.
 const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS cache_snapshots (
@@ -59,6 +59,11 @@ CREATE TABLE IF NOT EXISTS bookmarks (
   source TEXT NOT NULL,
   published_at TEXT,
   created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS dismissed_items (
+  item_key TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  dismissed_at TEXT NOT NULL
 );
 `;
 

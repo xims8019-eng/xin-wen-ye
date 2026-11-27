@@ -15,6 +15,13 @@
       "when": 1795140240263,
       "tag": "0002_news_tables_replace_entries",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1795746271307,
+      "tag": "0003_dismissed_items",
+      "breakpoints": true
     }
   ]
 }

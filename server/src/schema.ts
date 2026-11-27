@@ -30,3 +30,10 @@ export const bookmarks = sqliteTable("bookmarks", {
     .notNull()
     .$defaultFn(() => new Date()),
 });
+
+/** Items the user dismissed ("ignored") — hidden everywhere, synced across devices. */
+export const dismissedItems = sqliteTable("dismissed_items", {
+  itemKey: text("item_key").primaryKey(),
+  title: text("title").notNull(),
+  dismissedAt: text("dismissed_at").notNull(),
+});
